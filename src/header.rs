@@ -252,13 +252,12 @@ mod test {
 
     #[test]
     fn test_serde() {
-        // [4, 210, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 12, 99, 111, 100, 101, 99, 114, 97, 102, 116, 101, 114, 115, 2, 105, 111, 0, 0, 1, 0, 1]
         let input_bytes = [4u8, 210, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
         let input_header = Header::try_from(&input_bytes[..]).unwrap();
         println!("{input_header:?}");
         let mut output_bytes = [0u8; Header::SIZE];
         input_header.write_into(&mut output_bytes[..]);
         println!("{output_bytes:?}");
-        assert_eq!(&input_bytes[..], &output_bytes[..]);
+        assert_eq!(&input_bytes[..Header::SIZE], &output_bytes[..Header::SIZE]);
     }
 }
