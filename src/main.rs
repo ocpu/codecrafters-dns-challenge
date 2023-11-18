@@ -257,6 +257,7 @@ impl<'a, 'b: 'a> Iterator for QuestionPartIter<'a, 'b> {
             return None;
         };
         let (offset, len) = (*offset, *len);
+        self.index += 1;
         Some(&self.q.content[offset..offset + len])
     }
 }
