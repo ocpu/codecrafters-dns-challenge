@@ -385,29 +385,21 @@ impl<'a> DNSPacket<'a> {
         })
     }
 
-    fn respond(&self) -> DNSPacketBuilder<ResponseBuilder> {
+    fn respond(&self) -> DNSPacketBuilder {
         DNSPacketBuilder {
             id: self.header.id,
-            state: ResponseBuilder {},
-        }
+            opcode:Opcode::Query, questions: Vec::new(),    message_type: MessageType::Query,
+    }
     }
 
-    fn query(id: u16) -> DNSPacketBuilder<QueryBuilder> {
+    fn builder(id: u16) -> DNSPacketBuilder {
         DNSPacketBuilder {
             id,
-            state: QueryBuilder {
-                opcode: Opcode::Query,
+            message_type: MessageType::Query,
+                            opcode: Opcode::Query,
                 questions: Vec::new(),
-            },
-        }
+                   }
     }
-}
-
-struct ResponseBuilder {}
-
-struct QueryBuilder {
-    opcode: Opcode,
-    questions: Vec<QuestionOwned>,
 }
 
 struct QuestionOwned {
@@ -416,14 +408,16 @@ struct QuestionOwned {
     q_class: QClass,
 }
 
-struct DNSPacketBuilder<State> {
+struct DNSPacketBuilder {
     id: u16,
-    state: State,
+    opcode: Opcode,
+    questions: Vec<QuestionOwned>,
+    message_type: MessageType,
 }
 
-impl DNSPacketBuilder<QueryBuilder> {
+impl DNSPacketBuilder {
     pub fn add_question(mut self, q_type: QType, q_class: QClass, parts: Arc<[Box<str>]>) -> Self {
-        self.state.questions.push(QuestionOwned {
+        self.questions.push(QuestionOwned {
             parts,
             q_type,
             q_class,
@@ -431,17 +425,29 @@ impl DNSPacketBuilder<QueryBuilder> {
         self
     }
 
+    pub fn response(mut self) -> Self {
+        self.message_type = MessageType::Response;
+        self
+    }
+
+    pub fn query(mut self) -> Self {
+        self.message_type = MessageType::Query;
+        self
+    }
+
     pub fn build_into<'a>(self, buffer: &'a mut [u8]) -> (DNSPacket<'a>, usize) {
         let mut header = Header::new(self.id);
-        header.opcode = self.state.opcode;
-        header.question_entries = self.state.questions.len() as u16;
+        header.message_type = MessageType::Query;
+        header.opcode = self.opcode;
+        header.message_type = self.message_type;
+        header.question_entries = self.questions.len() as u16;
         header.write_into(buffer);
 
         let mut size = Header::SIZE;
         let mut buffer = &mut buffer[Header::SIZE..];
-        let mut questions = Vec::with_capacity(self.state.questions.len());
+        let mut questions = Vec::with_capacity(self.questions.len());
 
-        for question in self.state.questions {
+        for question in self.questions {
             let mut offset = 0;
             let mut offsets = Vec::with_capacity(question.parts.len());
             for part in question.parts.as_ref() {
@@ -450,6 +456,8 @@ impl DNSPacketBuilder<QueryBuilder> {
                 offsets.push((offset + 1, part.len()));
                 offset += part.len() + 1;
             }
+            offset += 1;
+            buffer[offset] = 0;
             let (content, buf) = buffer.split_at_mut(offset);
             buffer = buf;
             let [b1, b2] = question.q_type.as_u16().to_be_bytes();
@@ -504,7 +512,8 @@ fn main() {
             println!("q = {q}");
         }
 
-        let (_response_header, resp_size) = DNSPacket::query(1234)
+        let (_response_header, resp_size) = DNSPacket::builder(1234)
+            .response()
             .add_question(
                 QType::A,
                 QClass::IN,
