@@ -15,25 +15,23 @@ fn main() {
     let mut buf = [0; MAX_MESSAGE_SIZE];
 
     loop {
-        match udp_socket.recv_from(&mut buf) {
-            Ok((_size, source)) => {
-                let header = match Header::try_from(&buf[..]) {
-                    Ok(val) => val,
-                    Err(_) => continue,
-                };
-                let mut response = [0; MAX_MESSAGE_SIZE];
-                let mut response_header = Header::new(header.id);
-                response_header.message_type = MessageType::Response;
-                response_header.write_into(&mut response[..]);
-                //println!("{:?}", &response[..Header::SIZE]);
-                udp_socket
-                    .send_to(&response[..Header::SIZE], source)
-                    .expect("Failed to send response");
-            }
-            Err(e) => {
-                eprintln!("Error receiving data: {}", e);
-                break;
-            }
-        }
+        let Ok((size, source)) = udp_socket.recv_from(&mut buf) else {
+            eprintln!("ERROR: receiving data from socket");
+            break;
+        };
+        println!("Input: {:?}", &buf[..size]);
+
+        let header = match Header::try_from(&buf[..]) {
+            Ok(val) => val,
+            Err(_) => continue,
+        };
+        let mut response = [0; MAX_MESSAGE_SIZE];
+        let mut response_header = Header::new(header.id);
+        response_header.message_type = MessageType::Response;
+        response_header.write_into(&mut response[..]);
+        println!("Output: {:?}", &response[..Header::SIZE]);
+        udp_socket
+            .send_to(&response[..Header::SIZE], source)
+            .expect("Failed to send response");
     }
 }

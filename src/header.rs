@@ -178,12 +178,12 @@ impl Header {
         let [v_1, v_2] = self.id.to_be_bytes();
         buffer[0] = v_1;
         buffer[1] = v_2;
-        buffer[2] = self.message_type.as_u8()
-            + (self.opcode.as_u8() << 1)
-            + ((self.authoritive_answer as u8) << 5)
-            + ((self.truncated as u8) << 6)
-            + ((self.recursion_desired as u8) << 7);
-        buffer[3] = (self.recursion_available as u8) + (self.response_code.as_u8() << 4);
+        buffer[2] = (self.recursion_desired as u8)
+            | ((self.truncated as u8) << 1)
+            | ((self.authoritive_answer as u8) << 2)
+            | (self.opcode.as_u8() << 6)
+            | (self.message_type.as_u8() << 7);
+        buffer[3] = self.response_code.as_u8() | ((self.recursion_available as u8) << 7);
         let [v_1, v_2] = self.question_entries.to_be_bytes();
         buffer[4] = v_1;
         buffer[5] = v_2;
@@ -214,22 +214,22 @@ impl TryFrom<&[u8]> for Header {
         }
         Ok(Self {
             id: u16::from_be_bytes([value[0], value[1]]),
-            message_type: if (value[2] & 1) == 1 {
+            message_type: if (value[2] & 0xf0) == 0xf0 {
                 MessageType::Response
             } else {
                 MessageType::Query
             },
-            opcode: match (value[2] & 30).rotate_right(1) {
+            opcode: match (value[2] >> 3) & 0xf {
                 0 => Opcode::Query,
                 1 => Opcode::InverseQuery,
                 2 => Opcode::Status,
                 _ => return Err(HeaderParseError::UnknownOpcode),
             },
-            authoritive_answer: (value[2] & 32) == 32,
-            truncated: (value[2] & 64) == 64,
-            recursion_desired: (value[2] & 128) == 128,
-            recursion_available: (value[3] & 1) == 1,
-            response_code: match (value[3] & 0xf0).rotate_right(4) {
+            authoritive_answer: (value[2] & 4) == 4,
+            truncated: (value[2] & 2) == 2,
+            recursion_desired: (value[2] & 1) == 1,
+            recursion_available: (value[3] & 0xf0) == 0xf0,
+            response_code: match value[3] & 0xf {
                 0 => ResponseCode::None,
                 1 => ResponseCode::FormatError,
                 2 => ResponseCode::ServerFailure,
