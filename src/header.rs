@@ -160,7 +160,7 @@ impl Header {
     pub fn new(id: u16) -> Self {
         Self {
             id,
-            message_type: MessageType::Response,
+            message_type: MessageType::Query,
             opcode: Opcode::Query,
             authoritive_answer: false,
             truncated: false,
@@ -187,13 +187,13 @@ impl Header {
         let [v_1, v_2] = self.question_entries.to_be_bytes();
         buffer[4] = v_1;
         buffer[5] = v_2;
-        let [v_1, v_2] = self.question_entries.to_be_bytes();
+        let [v_1, v_2] = self.answer_entries.to_be_bytes();
         buffer[6] = v_1;
         buffer[7] = v_2;
-        let [v_1, v_2] = self.question_entries.to_be_bytes();
+        let [v_1, v_2] = self.authority_entries.to_be_bytes();
         buffer[8] = v_1;
         buffer[9] = v_2;
-        let [v_1, v_2] = self.question_entries.to_be_bytes();
+        let [v_1, v_2] = self.additional_entries.to_be_bytes();
         buffer[10] = v_1;
         buffer[11] = v_2;
     }
@@ -252,11 +252,13 @@ mod test {
 
     #[test]
     fn test_serde() {
-        let input_bytes = [0b100u8, 0b11010010, 0b00000001, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        // [4, 210, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 12, 99, 111, 100, 101, 99, 114, 97, 102, 116, 101, 114, 115, 2, 105, 111, 0, 0, 1, 0, 1]
+        let input_bytes = [4u8, 210, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
         let input_header = Header::try_from(&input_bytes[..]).unwrap();
         println!("{input_header:?}");
         let mut output_bytes = [0u8; Header::SIZE];
         input_header.write_into(&mut output_bytes[..]);
+        println!("{output_bytes:?}");
         assert_eq!(&input_bytes[..], &output_bytes[..]);
     }
 }
