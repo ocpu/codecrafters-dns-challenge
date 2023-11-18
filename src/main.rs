@@ -265,6 +265,7 @@ fn main() {
                 };
                 println!("Input header: {header:?}");
                 println!("Rest: {:?}", &buf[Header::SIZE..size]);
+                println!("All: {:?}", &buf[..size]);
                 let mut response = [0; MAX_MESSAGE_SIZE];
                 let response_header = Header {
                     id: header.id,
