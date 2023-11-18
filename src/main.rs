@@ -266,7 +266,7 @@ fn main() {
                 println!("Input header: {header:?}");
                 let mut response = [0; MAX_MESSAGE_SIZE];
                 let response_header = Header {
-                    id: 1234,
+                    id: header.id,
                     message_type: MessageType::Response,
                     opcode: Opcode::Query,
                     authoritive_answer: false,
