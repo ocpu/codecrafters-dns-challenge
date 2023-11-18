@@ -1,6 +1,8 @@
 mod header;
 
-use std::{fmt::Display, net::UdpSocket};
+use std::{fmt::Display, net::UdpSocket, sync::Arc};
+
+use header::{HeaderParseError, Opcode};
 
 use crate::header::{Header, MessageType, ResponseCode};
 
@@ -53,6 +55,56 @@ enum QType {
     MAILB,
     MAILA,
     All,
+}
+
+impl Type {
+    pub const fn as_u16(&self) -> u16 {
+        match self {
+            Self::A => 1,
+            Self::NS => 2,
+            Self::MD => 3,
+            Self::MF => 4,
+            Self::CNAME => 5,
+            Self::SOA => 6,
+            Self::MB => 7,
+            Self::MG => 8,
+            Self::MR => 9,
+            Self::NULL => 10,
+            Self::WKS => 11,
+            Self::PTR => 12,
+            Self::HINFO => 13,
+            Self::MINFO => 14,
+            Self::MX => 15,
+            Self::TXT => 16,
+        }
+    }
+}
+
+impl QType {
+    pub const fn as_u16(&self) -> u16 {
+        match self {
+            Self::A => 1,
+            Self::NS => 2,
+            Self::MD => 3,
+            Self::MF => 4,
+            Self::CNAME => 5,
+            Self::SOA => 6,
+            Self::MB => 7,
+            Self::MG => 8,
+            Self::MR => 9,
+            Self::NULL => 10,
+            Self::WKS => 11,
+            Self::PTR => 12,
+            Self::HINFO => 13,
+            Self::MINFO => 14,
+            Self::MX => 15,
+            Self::TXT => 16,
+            Self::AXFR => 252,
+            Self::MAILB => 253,
+            Self::MAILA => 254,
+            Self::All => 255,
+        }
+    }
 }
 
 impl TryFrom<u16> for Type {
@@ -139,6 +191,29 @@ enum QClass {
     CH,
     HS,
     Any,
+}
+
+impl Class {
+    pub const fn as_u16(&self) -> u16 {
+        match self {
+            Self::IN => 1,
+            Self::CS => 2,
+            Self::CH => 3,
+            Self::HS => 4,
+        }
+    }
+}
+
+impl QClass {
+    pub const fn as_u16(&self) -> u16 {
+        match self {
+            Self::IN => 1,
+            Self::CS => 2,
+            Self::CH => 3,
+            Self::HS => 4,
+            Self::Any => 255,
+        }
+    }
 }
 
 impl TryFrom<u16> for Class {
@@ -238,14 +313,17 @@ impl<'a> Question<'a> {
         let q_class =
             QClass::try_from(u16::from_be_bytes([buffer[cursor + 2], buffer[cursor + 3]]))
                 .map_err(|_| QuestionParseError::UnkonwnQClass)?;
-        Ok((Self {
-            // TODO: Make sure that it is only ASCII
-            content: std::str::from_utf8(&buffer[..cursor])
-                .map_err(|_| QuestionParseError::IllegalName)?,
-            offsets: offsets.into_boxed_slice(),
-            q_type,
-            q_class,
-        }, cursor + 4))
+        Ok((
+            Self {
+                // TODO: Make sure that it is only ASCII
+                content: std::str::from_utf8(&buffer[..cursor])
+                    .map_err(|_| QuestionParseError::IllegalName)?,
+                offsets: offsets.into_boxed_slice(),
+                q_type,
+                q_class,
+            },
+            cursor + 4,
+        ))
     }
 }
 
@@ -271,6 +349,133 @@ impl<'a> Display for Question<'a> {
     }
 }
 
+struct DNSPacket<'a> {
+    header: Header,
+    questions: Box<[Question<'a>]>,
+}
+
+enum DNSPacketParseError {
+    Header(HeaderParseError),
+    Question(QuestionParseError),
+}
+
+impl<'a> DNSPacket<'a> {
+    fn try_parse(buffer: &'a [u8]) -> Result<Self, DNSPacketParseError> {
+        let header =
+            Header::try_from(&buffer[..Header::SIZE]).map_err(DNSPacketParseError::Header)?;
+
+        let mut questions = if header.question_entries > 10 {
+            vec![]
+        } else {
+            Vec::with_capacity(header.question_entries.into())
+        };
+
+        let mut sections = &buffer[Header::SIZE..];
+
+        for _ in 0..header.question_entries {
+            let (question, len) =
+                Question::try_parse(&sections).map_err(DNSPacketParseError::Question)?;
+            sections = &sections[len..];
+            questions.push(question);
+        }
+
+        Ok(Self {
+            header,
+            questions: questions.into_boxed_slice(),
+        })
+    }
+
+    fn respond(&self) -> DNSPacketBuilder<ResponseBuilder> {
+        DNSPacketBuilder {
+            id: self.header.id,
+            state: ResponseBuilder {},
+        }
+    }
+
+    fn query(id: u16) -> DNSPacketBuilder<QueryBuilder> {
+        DNSPacketBuilder {
+            id,
+            state: QueryBuilder {
+                opcode: Opcode::Query,
+                questions: Vec::new(),
+            },
+        }
+    }
+}
+
+struct ResponseBuilder {}
+
+struct QueryBuilder {
+    opcode: Opcode,
+    questions: Vec<QuestionOwned>,
+}
+
+struct QuestionOwned {
+    parts: Arc<[Box<str>]>,
+    q_type: QType,
+    q_class: QClass,
+}
+
+struct DNSPacketBuilder<State> {
+    id: u16,
+    state: State,
+}
+
+impl DNSPacketBuilder<QueryBuilder> {
+    pub fn add_question(mut self, q_type: QType, q_class: QClass, parts: Arc<[Box<str>]>) -> Self {
+        self.state.questions.push(QuestionOwned {
+            parts,
+            q_type,
+            q_class,
+        });
+        self
+    }
+
+    pub fn build_into<'a>(self, buffer: &'a mut [u8]) -> (DNSPacket<'a>, usize) {
+        let mut header = Header::new(self.id);
+        header.opcode = self.state.opcode;
+        header.question_entries = self.state.questions.len() as u16;
+        header.write_into(buffer);
+
+        let mut size = Header::SIZE;
+        let mut buffer = &mut buffer[Header::SIZE..];
+        let mut questions = Vec::with_capacity(self.state.questions.len());
+
+        for question in self.state.questions {
+            let mut offset = 0;
+            let mut offsets = Vec::with_capacity(question.parts.len());
+            for part in question.parts.as_ref() {
+                buffer[offset] = part.len() as u8;
+                buffer[offset + 1..offset + 1 + part.len()].copy_from_slice(part.as_bytes());
+                offsets.push((offset + 1, part.len()));
+                offset += part.len() + 1;
+            }
+            let (content, buf) = buffer.split_at_mut(offset);
+            buffer = buf;
+            let [b1, b2] = question.q_type.as_u16().to_be_bytes();
+            buffer[0] = b1;
+            buffer[1] = b2;
+            let [b1, b2] = question.q_class.as_u16().to_be_bytes();
+            buffer[2] = b1;
+            buffer[3] = b2;
+            buffer = &mut buffer[4..];
+            let content = std::str::from_utf8(content).unwrap();
+            questions.push(Question {
+                content,
+                offsets: offsets.into_boxed_slice(),
+                q_type: question.q_type,
+                q_class: question.q_class,
+            });
+            size += offset + 4;
+        }
+
+        (DNSPacket {
+            header,
+            questions: questions.into_boxed_slice(),
+        }, size)
+    }
+}
+
 fn main() {
     println!("Logs from your program will appear here!");
 
@@ -278,57 +483,38 @@ fn main() {
     let mut buf = [0; MAX_MESSAGE_SIZE];
     let mut response = [0; MAX_MESSAGE_SIZE];
 
-    'recv: loop {
+    loop {
         let Ok((size, source)) = udp_socket.recv_from(&mut buf) else {
             eprintln!("ERROR: receiving data from socket");
             break;
         };
         println!("Input: {:?}", &buf[..size]);
-
-        let header = match Header::try_from(&buf[..]) {
-            Ok(val) => val,
-            Err(_) => continue,
-        };
-        let mut questions = if header.question_entries > 10 {
-            vec![]
-        } else {
-            Vec::with_capacity(header.question_entries.into())
-        };
-
-        let mut sections = &buf[Header::SIZE..size];
-
-        for _ in 0..header.question_entries {
-            let (question, len) = match Question::try_parse(&sections) {
-                Ok(res) => res,
-                Err(_) => {
-                    let mut res_header = Header::new(header.id);
-                    res_header.response_code = ResponseCode::FormatError;
-                    res_header.write_into(&mut response[..]);
-                    let Ok(_) = udp_socket.send_to(&response[..Header::SIZE], source) else {
-                        eprintln!("Failed to send response");
-                        continue 'recv;
-                    };
-                    continue 'recv;
-                }
+        let Ok(packet) = DNSPacket::try_parse(&buf[..size]) else {
+            let mut res_header = Header::new(u16::from_be_bytes([buf[0], buf[1]]));
+            res_header.response_code = ResponseCode::FormatError;
+            res_header.write_into(&mut response[..]);
+            let Ok(_) = udp_socket.send_to(&response[..Header::SIZE], source) else {
+                eprintln!("Failed to send response");
+                continue;
             };
-            sections = &sections[len..];
-            questions.push(question);
-        }
+            continue;
+        };
 
-        for q in &questions {
+        for q in packet.questions.iter() {
             println!("q = {q}");
         }
 
+        let (_response_header, resp_size) = DNSPacket::query(1234)
+            .add_question(
+                QType::A,
+                QClass::IN,
+                Arc::from(vec!["codecrafters".into(), "io".into()]),
+            )
+            .build_into(&mut response[..]);
 
-
-
-
-        let mut response_header = Header::new(header.id);
-        response_header.message_type = MessageType::Response;
-        response_header.write_into(&mut response[..]);
-        println!("Output: {:?}", &response[..Header::SIZE]);
+        println!("Output: {:?}", &response[..resp_size]);
         udp_socket
-            .send_to(&response[..Header::SIZE], source)
+            .send_to(&response[..resp_size], source)
             .expect("Failed to send response");
     }
 }
