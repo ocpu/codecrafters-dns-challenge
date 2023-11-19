@@ -177,11 +177,11 @@ impl Header {
     pub fn write_into(&self, buffer: &mut [u8]) {
         let _ = &buffer[0..2].copy_from_slice(&self.id.to_be_bytes());
         buffer[2] = (self.recursion_desired as u8)
-            | ((self.truncated as u8) << 1)
-            | ((self.authoritive_answer as u8) << 2)
-            | (self.opcode.as_u8() << 6)
-            | (self.packet_type.as_u8() << 7);
-        buffer[3] = self.response_code.as_u8() | ((self.recursion_available as u8) << 7);
+            + ((self.truncated as u8) << 1)
+            + ((self.authoritive_answer as u8) << 2)
+            + (self.opcode.as_u8() << 3)
+            + (self.packet_type.as_u8() << 7);
+        buffer[3] = self.response_code.as_u8() + ((self.recursion_available as u8) << 7);
         let _ = &buffer[4..6].copy_from_slice(&self.question_entries.to_be_bytes());
         let _ = &buffer[6..8].copy_from_slice(&self.answer_entries.to_be_bytes());
         let _ = &buffer[8..10].copy_from_slice(&self.authority_entries.to_be_bytes());
@@ -208,12 +208,12 @@ impl TryFrom<&[u8]> for Header {
         }
         Ok(Self {
             id: u16::from_be_bytes([value[0], value[1]]),
-            packet_type: if (value[2] & 0xf0) == 0xf0 {
+            packet_type: if (value[2] & 0x80) == 0x80 {
                 PacketType::Response
             } else {
                 PacketType::Query
             },
-            opcode: match (value[2] >> 6) & 0xf {
+            opcode: match (value[2] >> 3) & 0xf {
                 0 => Opcode::Query,
                 1 => Opcode::InverseQuery,
                 2 => Opcode::Status,
@@ -246,7 +246,7 @@ mod test {
 
     #[test]
     fn test_serde() {
-        let input_bytes = [4u8, 210, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        let input_bytes = [4u8, 210, 16, 0, 0, 1, 0, 0, 0, 0, 0, 0];
         let input_header = Header::try_from(&input_bytes[..]).unwrap();
         println!("{input_header:?}");
         let mut output_bytes = [0u8; Header::SIZE];
