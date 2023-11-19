@@ -94,22 +94,19 @@ impl<'a> Resource<'a> {
     }
 }
 
-pub struct ARecord<'a> {
-    name: CowDomainName<'a>,
+pub struct ARecord {
     ttl: u32,
     addr: Ipv4Addr,
 }
 
-impl<'a> ARecord<'a> {
-    pub fn new(name: CowDomainName<'a>, ttl: u32, addr: Ipv4Addr) -> Self {
-        Self { name, ttl, addr }
+impl ARecord {
+    pub fn new(ttl: u32, addr: Ipv4Addr) -> Self {
+        Self { ttl, addr }
     }
-}
 
-impl<'a> Into<Resource<'a>> for ARecord<'a> {
-    fn into(self) -> Resource<'a> {
+    pub fn to_resource<'a>(&self, name: CowDomainName<'a>) -> Resource<'a> {
         Resource::new(
-            self.name,
+            name,
             Type::A,
             Class::IN,
             self.ttl,

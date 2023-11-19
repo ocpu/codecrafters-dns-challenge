@@ -1,4 +1,4 @@
-use std::{fmt::Display, hash::Hash, marker::PhantomData, ops::Deref, sync::Arc};
+use std::{fmt::Display, hash::Hash, marker::PhantomData, sync::Arc};
 
 #[derive(Debug)]
 pub struct UnknownType(u16);
@@ -248,8 +248,11 @@ impl From<Class> for QClass {
 const MAX_LABEL_SIZE: usize = 63;
 const MAX_NAME_SIZE: usize = 255;
 
+#[derive(Debug, Clone)]
 pub struct DomainName<'a>(Box<[&'a str]>);
+#[derive(Debug)]
 pub struct DomainNameOwned(Box<[Box<str>]>);
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum CowDomainName<'a> {
     Borrowed(DomainName<'a>),
     Owned(Arc<DomainNameOwned>),
@@ -388,11 +391,11 @@ impl DomainNameOwned {
     pub fn len_in_packet(&self) -> usize {
         1 + self.0.iter().map(|part| part.len() + 1).sum::<usize>()
     }
-
+/*
     pub fn parts(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(|part| part.deref().as_ref())
     }
-
+*/
     pub fn parts_count(&self) -> usize {
         self.0.len()
     }
@@ -402,11 +405,11 @@ impl<'a> DomainName<'a> {
     pub fn len_in_packet(&self) -> usize {
         1 + self.0.iter().map(|part| part.len() + 1).sum::<usize>()
     }
-
+/*
     pub fn parts(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(|part| part.as_ref())
     }
-
+*/
     pub fn parts_count(&self) -> usize {
         self.0.len()
     }
@@ -549,6 +552,40 @@ impl<'a> Hash for CowDomainName<'a> {
             CowDomainName::Borrowed(name) => name.hash(state),
         }
     }
+}
+
+impl<'a> PartialEq for DomainName<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len_in_packet() != other.len_in_packet() || self.0.len() != other.0.len() {
+            return false;
+        }
+        self.0.iter().zip(other.0.iter()).all(|(part_a, part_b)| {
+            if part_a.len() != part_b.len() {
+                return false;
+            }
+            part_a.eq_ignore_ascii_case(part_b)
+        })
+    }
+}
+
+impl<'a> Eq for DomainName<'a> {
+}
+
+impl PartialEq for DomainNameOwned {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len_in_packet() != other.len_in_packet() || self.0.len() != other.0.len() {
+            return false;
+        }
+        self.0.iter().zip(other.0.iter()).all(|(part_a, part_b)| {
+            if part_a.len() != part_b.len() {
+                return false;
+            }
+            part_a.eq_ignore_ascii_case(part_b)
+        })
+    }
+}
+
+impl Eq for DomainNameOwned {
 }
 
 pub enum CowData<'a> {

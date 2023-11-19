@@ -5,28 +5,30 @@ mod resource;
 mod types;
 
 use crate::{
-    header::{ResponseCode, Opcode},
+    header::{Opcode, ResponseCode},
     packet::DNSPacket,
     question::Question,
     resource::ARecord,
-    types::{DomainName, DomainNameOwned, QClass, QType},
+    types::{CowDomainName, DomainName},
 };
-use std::{net::UdpSocket, sync::Arc};
+use std::{
+    collections::HashMap,
+    net::{Ipv4Addr, UdpSocket},
+};
 
 const MAX_MESSAGE_SIZE: usize = 512;
 
 fn main() {
     println!("Logs from your program will appear here!");
+    let mut map = HashMap::new();
+    map.insert(
+        CowDomainName::Borrowed(DomainName::from_str("codecrafters.io").unwrap()),
+        ARecord::new(500, Ipv4Addr::new(8, 8, 8, 8)),
+    );
 
     let udp_socket = UdpSocket::bind("127.0.0.1:2053").expect("Failed to bind to address");
     let mut buf = [0; MAX_MESSAGE_SIZE];
     let mut response = [0; MAX_MESSAGE_SIZE];
-
-    let domain_name: Arc<DomainNameOwned> = Arc::new(
-        DomainName::from_str("codecrafters.io")
-            .expect("'codecrafters.io' could not get turned into a DomainName")
-            .into(),
-    );
 
     loop {
         let Ok((size, source)) = udp_socket.recv_from(&mut buf) else {
@@ -48,17 +50,21 @@ fn main() {
             continue;
         };
 
+        let mut builder = packet.respond(match packet.header().opcode {
+            Opcode::Query => ResponseCode::None,
+            _ => ResponseCode::NotImplemented,
+        });
+
         for q in packet.questions() {
-            println!("q = {q}");
+            builder =
+                builder.add_question(Question::new(*q.q_type(), *q.q_class(), q.name().clone()));
+            builder = match map.get(q.name()) {
+                Some(record) => builder.add_answer(record.to_resource(q.name().clone())),
+                None => builder,
+            }
         }
 
-        let (_response_header, resp_size) = packet
-            .respond(match packet.header().opcode {
-                Opcode::Query => ResponseCode::None,
-                _ => ResponseCode::NotImplemented,
-            })
-            .add_question(Question::new(QType::A, QClass::IN, (&domain_name).into()))
-            .add_answer(ARecord::new((&domain_name).into(), 100, "8.8.8.8".parse().unwrap()).into())
+        let (_response_header, resp_size) = builder
             .build_into(&mut response[..])
             .expect("TODO: split response?");
 

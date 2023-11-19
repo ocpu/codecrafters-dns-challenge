@@ -1,5 +1,5 @@
 use crate::{
-    header::{Header, HeaderParseError, Opcode, PacketType, ResponseCode},
+    header::{Header, HeaderParseError, PacketType, ResponseCode},
     question::{Question, QuestionParseError},
     resource::{Resource, ResourceParseError},
     types::{CowData, DomainName},
@@ -8,7 +8,7 @@ use crate::{
 pub struct DNSPacket<'a> {
     header: Header,
     questions: Box<[Question<'a>]>,
-    answers: Box<[Resource<'a>]>,
+    _answers: Box<[Resource<'a>]>,
 }
 
 pub struct DNSPacketBuilder<'a> {
@@ -36,7 +36,7 @@ impl<'a> DNSPacket<'a> {
         Self {
             header: Header::new(id),
             questions: Vec::new().into_boxed_slice(),
-            answers: Vec::new().into_boxed_slice(),
+            _answers: Vec::new().into_boxed_slice(),
         }
     }
 
@@ -47,11 +47,11 @@ impl<'a> DNSPacket<'a> {
     pub fn questions(&self) -> &[Question<'a>] {
         &self.questions
     }
-
+/*
     pub fn answers(&self) -> &[Resource<'a>] {
         &self.answers
     }
-
+*/
     pub fn try_parse_header_only(buffer: &'a [u8]) -> Option<DNSPacket<'a>> {
         let header = match Header::try_from(buffer) {
             Ok(header) => header,
@@ -61,7 +61,7 @@ impl<'a> DNSPacket<'a> {
         Some(Self {
             header,
             questions: Vec::new().into_boxed_slice(),
-            answers: Vec::new().into_boxed_slice(),
+            _answers: Vec::new().into_boxed_slice(),
         })
     }
 
@@ -91,7 +91,7 @@ impl<'a> DNSPacket<'a> {
         Ok(Self {
             header,
             questions: questions.into_boxed_slice(),
-            answers: answers.into_boxed_slice(),
+            _answers: answers.into_boxed_slice(),
         })
     }
 
@@ -107,7 +107,7 @@ impl<'a> DNSPacket<'a> {
             answers: Vec::new(),
         }
     }
-
+/*
     pub fn respond_ok(&self) -> DNSPacketBuilder<'a> {
         self.respond(ResponseCode::None)
     }
@@ -120,6 +120,7 @@ impl<'a> DNSPacket<'a> {
             answers: Vec::new(),
         }
     }
+*/
 }
 
 #[derive(Debug)]
@@ -137,12 +138,6 @@ impl<'a> DNSPacketBuilder<'a> {
     pub fn add_answer(mut self, answer: Resource<'a>) -> Self {
         self.answers.push(answer);
         self.header.answer_entries += 1;
-        self
-    }
-
-    pub fn response(mut self, code: ResponseCode) -> Self {
-        self.header.packet_type = PacketType::Response;
-        self.header.response_code = code;
         self
     }
 
@@ -232,7 +227,7 @@ impl<'a> DNSPacketBuilder<'a> {
             DNSPacket {
                 header: self.header,
                 questions: questions.into_boxed_slice(),
-                answers: answers.into_boxed_slice(),
+                _answers: answers.into_boxed_slice(),
             },
             size,
         ))
