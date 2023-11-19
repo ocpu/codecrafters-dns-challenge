@@ -1,13 +1,17 @@
 mod header;
+mod packet;
 mod question;
 mod types;
-mod packet;
 
 use std::{net::UdpSocket, sync::Arc};
 
 use types::{QClass, QType};
 
-use crate::{header::{Header, ResponseCode}, packet::DNSPacket};
+use crate::{
+    header::ResponseCode,
+    packet::DNSPacket,
+    types::{DomainName, DomainNameOwned},
+};
 
 const MAX_MESSAGE_SIZE: usize = 512;
 
@@ -18,6 +22,12 @@ fn main() {
     let mut buf = [0; MAX_MESSAGE_SIZE];
     let mut response = [0; MAX_MESSAGE_SIZE];
 
+    let domain_name: Arc<DomainNameOwned> = Arc::new(
+        DomainName::from_str("codecrafters.io")
+            .expect("'codecrafters.io' could not get turned into a DomainName")
+            .into(),
+    );
+
     loop {
         let Ok((size, source)) = udp_socket.recv_from(&mut buf) else {
             eprintln!("ERROR: receiving data from socket");
@@ -25,10 +35,15 @@ fn main() {
         };
         println!("Input: {:?}", &buf[..size]);
         let Ok(packet) = DNSPacket::try_parse(&buf[..size]) else {
-            let mut res_header = Header::new(u16::from_be_bytes([buf[0], buf[1]]));
-            res_header.response_code = ResponseCode::FormatError;
-            res_header.write_into(&mut response[..]);
-            let Ok(_) = udp_socket.send_to(&response[..Header::SIZE], source) else {
+            let id = if size >= 2 {
+                u16::from_be_bytes([buf[0], buf[1]])
+            } else {
+                0
+            };
+            let (_, resp_size) = DNSPacket::builder(id)
+                .response(ResponseCode::FormatError)
+                .build_into(&mut response[..]);
+            let Ok(_) = udp_socket.send_to(&response[..resp_size], source) else {
                 eprintln!("Failed to send response");
                 continue;
             };
@@ -39,13 +54,9 @@ fn main() {
             println!("q = {q}");
         }
 
-        let (_response_header, resp_size) = DNSPacket::builder(1234)
-            .response()
-            .add_question(
-                QType::A,
-                QClass::IN,
-                Arc::from(vec!["codecrafters".into(), "io".into()]),
-            )
+        let (_response_header, resp_size) = packet
+            .respond_ok()
+            .add_question(QType::A, QClass::IN, (&domain_name).into())
             .build_into(&mut response[..]);
 
         println!("Output: {:?}", &response[..resp_size]);
