@@ -1,5 +1,5 @@
 use crate::{
-    header::{Header, HeaderParseError, MessageType, Opcode, ResponseCode},
+    header::{Header, HeaderParseError, Opcode, PacketType, ResponseCode},
     question::{Question, QuestionParseError},
     resource::{Resource, ResourceParseError},
     types::{CowData, DomainName},
@@ -12,10 +12,7 @@ pub struct DNSPacket<'a> {
 }
 
 pub struct DNSPacketBuilder<'a> {
-    id: u16,
-    opcode: Opcode,
-    response_code: ResponseCode,
-    message_type: MessageType,
+    header: Header,
     questions: Vec<Question<'a>>,
     answers: Vec<Resource<'a>>,
 }
@@ -78,11 +75,13 @@ impl<'a> DNSPacket<'a> {
     }
 
     pub fn respond(&self, code: ResponseCode) -> DNSPacketBuilder<'a> {
+        let mut header = Header::new(self.header.id);
+        header.opcode = self.header.opcode;
+        header.recursion_desired = self.header.recursion_desired;
+        header.packet_type = PacketType::Response;
+        header.response_code = code;
         DNSPacketBuilder {
-            id: self.header.id,
-            response_code: code,
-            opcode: Opcode::Query,
-            message_type: MessageType::Response,
+            header,
             questions: Vec::new(),
             answers: Vec::new(),
         }
@@ -92,12 +91,10 @@ impl<'a> DNSPacket<'a> {
         self.respond(ResponseCode::None)
     }
 
-    pub fn builder(id: u16) -> DNSPacketBuilder<'a> {
+    pub fn query(id: u16) -> DNSPacketBuilder<'a> {
+        let header = Header::new(id);
         DNSPacketBuilder {
-            id,
-            response_code: ResponseCode::None,
-            message_type: MessageType::Query,
-            opcode: Opcode::Query,
+            header,
             questions: Vec::new(),
             answers: Vec::new(),
         }
@@ -112,29 +109,19 @@ pub enum WritePacketError {
 impl<'a> DNSPacketBuilder<'a> {
     pub fn add_question(mut self, question: Question<'a>) -> Self {
         self.questions.push(question);
+        self.header.question_entries += 1;
         self
     }
 
     pub fn add_answer(mut self, answer: Resource<'a>) -> Self {
         self.answers.push(answer);
+        self.header.answer_entries += 1;
         self
     }
 
     pub fn response(mut self, code: ResponseCode) -> Self {
-        self.message_type = MessageType::Response;
-        self.response_code = code;
-        self
-    }
-
-    pub fn respone_ok(mut self) -> Self {
-        self.message_type = MessageType::Response;
-        self.response_code = ResponseCode::None;
-        self
-    }
-
-    pub fn query(mut self) -> Self {
-        self.message_type = MessageType::Query;
-        self.response_code = ResponseCode::None;
+        self.header.packet_type = PacketType::Response;
+        self.header.response_code = code;
         self
     }
 
@@ -142,14 +129,7 @@ impl<'a> DNSPacketBuilder<'a> {
         self,
         buffer: &'b mut [u8],
     ) -> Result<(DNSPacket<'b>, usize), WritePacketError> {
-        let mut header = Header::new(self.id);
-        header.message_type = MessageType::Query;
-        header.opcode = self.opcode;
-        header.message_type = self.message_type;
-        header.response_code = self.response_code;
-        header.question_entries = self.questions.len() as u16;
-        header.answer_entries = self.answers.len() as u16;
-        header.write_into(buffer);
+        self.header.write_into(buffer);
 
         let mut size = Header::SIZE;
         let mut buffer = &mut buffer[Header::SIZE..];
@@ -229,7 +209,7 @@ impl<'a> DNSPacketBuilder<'a> {
 
         Ok((
             DNSPacket {
-                header,
+                header: self.header,
                 questions: questions.into_boxed_slice(),
                 answers: answers.into_boxed_slice(),
             },

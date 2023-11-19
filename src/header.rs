@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Opcode {
     Query,
     InverseQuery,
@@ -15,22 +15,22 @@ impl Opcode {
     }
 }
 
-#[derive(Debug)]
-pub enum MessageType {
+#[derive(Debug, Clone, Copy)]
+pub enum PacketType {
     Query,
     Response,
 }
 
-impl MessageType {
+impl PacketType {
     const fn as_u8(&self) -> u8 {
         match self {
-            MessageType::Query => 0,
-            MessageType::Response => 1,
+            Self::Query => 0,
+            Self::Response => 1,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ResponseCode {
     /// No error condition
     None,
@@ -80,7 +80,7 @@ pub struct Header {
     /// query (0), or a response (1).
     ///
     /// Field: QR
-    pub message_type: MessageType,
+    pub packet_type: PacketType,
 
     /// A four bit field that specifies kind of query in this
     /// message.  This value is set by the originator of a query
@@ -160,7 +160,7 @@ impl Header {
     pub fn new(id: u16) -> Self {
         Self {
             id,
-            message_type: MessageType::Query,
+            packet_type: PacketType::Query,
             opcode: Opcode::Query,
             authoritive_answer: false,
             truncated: false,
@@ -182,7 +182,7 @@ impl Header {
             | ((self.truncated as u8) << 1)
             | ((self.authoritive_answer as u8) << 2)
             | (self.opcode.as_u8() << 6)
-            | (self.message_type.as_u8() << 7);
+            | (self.packet_type.as_u8() << 7);
         buffer[3] = self.response_code.as_u8() | ((self.recursion_available as u8) << 7);
         let [v_1, v_2] = self.question_entries.to_be_bytes();
         buffer[4] = v_1;
@@ -204,20 +204,24 @@ pub enum HeaderParseError {
     UseOfReservedBits,
     UnknownOpcode,
     UnknownResponseCode,
+    EOF,
 }
 
 impl TryFrom<&[u8]> for Header {
     type Error = HeaderParseError;
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        if value.len() < Self::SIZE {
+            return Err(HeaderParseError::EOF);
+        }
         if (value[3] & 0b1110) != 0 {
             return Err(HeaderParseError::UseOfReservedBits);
         }
         Ok(Self {
             id: u16::from_be_bytes([value[0], value[1]]),
-            message_type: if (value[2] & 0xf0) == 0xf0 {
-                MessageType::Response
+            packet_type: if (value[2] & 0xf0) == 0xf0 {
+                PacketType::Response
             } else {
-                MessageType::Query
+                PacketType::Query
             },
             opcode: match (value[2] >> 3) & 0xf {
                 0 => Opcode::Query,
