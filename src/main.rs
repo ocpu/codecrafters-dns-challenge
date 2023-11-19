@@ -5,10 +5,11 @@ mod resource;
 mod types;
 
 use crate::{
-    header::ResponseCode,
+    header::{ResponseCode, Opcode},
     packet::DNSPacket,
+    question::Question,
     resource::ARecord,
-    types::{DomainName, DomainNameOwned, QType, QClass}, question::Question,
+    types::{DomainName, DomainNameOwned, QClass, QType},
 };
 use std::{net::UdpSocket, sync::Arc};
 
@@ -34,15 +35,12 @@ fn main() {
         };
         println!("Input: {:?}", &buf[..size]);
         let Ok(packet) = DNSPacket::try_parse(&buf[..size]) else {
-            let id = if size >= 2 {
-                u16::from_be_bytes([buf[0], buf[1]])
-            } else {
-                0
-            };
-            let (_, resp_size) = DNSPacket::builder(id)
-                .response(ResponseCode::FormatError)
+            let (_, resp_size) = DNSPacket::try_parse_header_only(&buf[..size])
+                .unwrap_or_else(|| DNSPacket::new(0))
+                .respond(ResponseCode::FormatError)
                 .build_into(&mut response[..])
                 .expect("Packet header is too large for buffer");
+
             let Ok(_) = udp_socket.send_to(&response[..resp_size], source) else {
                 eprintln!("Failed to send response");
                 continue;
@@ -55,7 +53,10 @@ fn main() {
         }
 
         let (_response_header, resp_size) = packet
-            .respond_ok()
+            .respond(match packet.header().opcode {
+                Opcode::Query => ResponseCode::None,
+                _ => ResponseCode::NotImplemented,
+            })
             .add_question(Question::new(QType::A, QClass::IN, (&domain_name).into()))
             .add_answer(ARecord::new((&domain_name).into(), 100, "8.8.8.8".parse().unwrap()).into())
             .build_into(&mut response[..])

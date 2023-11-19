@@ -32,6 +32,14 @@ fn get_entry_vec<T>(entries: u16) -> Vec<T> {
 }
 
 impl<'a> DNSPacket<'a> {
+    pub fn new(id: u16) -> Self {
+        Self {
+            header: Header::new(id),
+            questions: Vec::new().into_boxed_slice(),
+            answers: Vec::new().into_boxed_slice(),
+        }
+    }
+
     pub fn header(&self) -> &Header {
         &self.header
     }
@@ -42,6 +50,19 @@ impl<'a> DNSPacket<'a> {
 
     pub fn answers(&self) -> &[Resource<'a>] {
         &self.answers
+    }
+
+    pub fn try_parse_header_only(buffer: &'a [u8]) -> Option<DNSPacket<'a>> {
+        let header = match Header::try_from(buffer) {
+            Ok(header) => header,
+            Err(_) if buffer.len() >= 2 => Header::new(u16::from_be_bytes([buffer[0], buffer[1]])),
+            Err(_) => return None,
+        };
+        Some(Self {
+            header,
+            questions: Vec::new().into_boxed_slice(),
+            answers: Vec::new().into_boxed_slice(),
+        })
     }
 
     pub fn try_parse(buffer: &'a [u8]) -> Result<Self, DNSPacketParseError> {
