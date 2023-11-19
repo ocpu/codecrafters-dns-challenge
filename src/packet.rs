@@ -17,6 +17,7 @@ pub struct DNSPacketBuilder<'a> {
     answers: Vec<Resource<'a>>,
 }
 
+#[derive(Debug)]
 pub enum DNSPacketParseError {
     Header(HeaderParseError),
     Question(QuestionParseError),

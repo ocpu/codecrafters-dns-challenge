@@ -36,18 +36,22 @@ fn main() {
             break;
         };
         println!("Input: {:?}", &buf[..size]);
-        let Ok(packet) = DNSPacket::try_parse(&buf[..size]) else {
-            let (_, resp_size) = DNSPacket::try_parse_header_only(&buf[..size])
-                .unwrap_or_else(|| DNSPacket::new(0))
-                .respond(ResponseCode::FormatError)
-                .build_into(&mut response[..])
-                .expect("Packet header is too large for buffer");
+        let packet = match DNSPacket::try_parse(&buf[..size]) {
+            Ok(packet) => packet,
+            Err(e) => {
+                eprintln!("Failed to parse packet: {e:?}");
+                let (_, resp_size) = DNSPacket::try_parse_header_only(&buf[..size])
+                    .unwrap_or_else(|| DNSPacket::new(0))
+                    .respond(ResponseCode::FormatError)
+                    .build_into(&mut response[..])
+                    .expect("Packet header is too large for buffer");
 
-            let Ok(_) = udp_socket.send_to(&response[..resp_size], source) else {
-                eprintln!("Failed to send response");
+                let Ok(_) = udp_socket.send_to(&response[..resp_size], source) else {
+                    eprintln!("Failed to send response");
+                    continue;
+                };
                 continue;
-            };
-            continue;
+            }
         };
 
         let mut builder = packet.respond(match packet.header().opcode {
