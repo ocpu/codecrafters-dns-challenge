@@ -175,35 +175,25 @@ impl Header {
     }
 
     pub fn write_into(&self, buffer: &mut [u8]) {
-        let [v_1, v_2] = self.id.to_be_bytes();
-        buffer[0] = v_1;
-        buffer[1] = v_2;
+        let _ = &buffer[0..2].copy_from_slice(&self.id.to_be_bytes());
         buffer[2] = (self.recursion_desired as u8)
             | ((self.truncated as u8) << 1)
             | ((self.authoritive_answer as u8) << 2)
             | (self.opcode.as_u8() << 6)
             | (self.packet_type.as_u8() << 7);
         buffer[3] = self.response_code.as_u8() | ((self.recursion_available as u8) << 7);
-        let [v_1, v_2] = self.question_entries.to_be_bytes();
-        buffer[4] = v_1;
-        buffer[5] = v_2;
-        let [v_1, v_2] = self.answer_entries.to_be_bytes();
-        buffer[6] = v_1;
-        buffer[7] = v_2;
-        let [v_1, v_2] = self.authority_entries.to_be_bytes();
-        buffer[8] = v_1;
-        buffer[9] = v_2;
-        let [v_1, v_2] = self.additional_entries.to_be_bytes();
-        buffer[10] = v_1;
-        buffer[11] = v_2;
+        let _ = &buffer[4..6].copy_from_slice(&self.question_entries.to_be_bytes());
+        let _ = &buffer[6..8].copy_from_slice(&self.answer_entries.to_be_bytes());
+        let _ = &buffer[8..10].copy_from_slice(&self.authority_entries.to_be_bytes());
+        let _ = &buffer[10..12].copy_from_slice(&self.additional_entries.to_be_bytes());
     }
 }
 
 #[derive(Debug)]
 pub enum HeaderParseError {
     UseOfReservedBits,
-    UnknownOpcode,
-    UnknownResponseCode,
+    UnknownOpcode(u8),
+    UnknownResponseCode(u8),
     EOF,
 }
 
@@ -223,11 +213,11 @@ impl TryFrom<&[u8]> for Header {
             } else {
                 PacketType::Query
             },
-            opcode: match (value[2] >> 3) & 0xf {
+            opcode: match (value[2] >> 6) & 0xf {
                 0 => Opcode::Query,
                 1 => Opcode::InverseQuery,
                 2 => Opcode::Status,
-                _ => return Err(HeaderParseError::UnknownOpcode),
+                code => return Err(HeaderParseError::UnknownOpcode(code)),
             },
             authoritive_answer: (value[2] & 4) == 4,
             truncated: (value[2] & 2) == 2,
@@ -240,7 +230,7 @@ impl TryFrom<&[u8]> for Header {
                 3 => ResponseCode::NameError,
                 4 => ResponseCode::NotImplemented,
                 5 => ResponseCode::Refused,
-                _ => return Err(HeaderParseError::UnknownResponseCode),
+                code => return Err(HeaderParseError::UnknownResponseCode(code)),
             },
             question_entries: u16::from_be_bytes([value[4], value[5]]),
             answer_entries: u16::from_be_bytes([value[6], value[7]]),
