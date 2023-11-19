@@ -1,17 +1,16 @@
 mod header;
 mod packet;
 mod question;
+mod resource;
 mod types;
-
-use std::{net::UdpSocket, sync::Arc};
-
-use types::{QClass, QType};
 
 use crate::{
     header::ResponseCode,
     packet::DNSPacket,
-    types::{DomainName, DomainNameOwned},
+    resource::ARecord,
+    types::{DomainName, DomainNameOwned, QType, QClass}, question::Question,
 };
+use std::{net::UdpSocket, sync::Arc};
 
 const MAX_MESSAGE_SIZE: usize = 512;
 
@@ -42,7 +41,8 @@ fn main() {
             };
             let (_, resp_size) = DNSPacket::builder(id)
                 .response(ResponseCode::FormatError)
-                .build_into(&mut response[..]);
+                .build_into(&mut response[..])
+                .expect("Packet header is too large for buffer");
             let Ok(_) = udp_socket.send_to(&response[..resp_size], source) else {
                 eprintln!("Failed to send response");
                 continue;
@@ -56,8 +56,10 @@ fn main() {
 
         let (_response_header, resp_size) = packet
             .respond_ok()
-            .add_question(QType::A, QClass::IN, (&domain_name).into())
-            .build_into(&mut response[..]);
+            .add_question(Question::new(QType::A, QClass::IN, (&domain_name).into()))
+            .add_answer(ARecord::new((&domain_name).into(), 100, "8.8.8.8".parse().unwrap()).into())
+            .build_into(&mut response[..])
+            .expect("TODO: split response?");
 
         println!("Output: {:?}", &response[..resp_size]);
         udp_socket

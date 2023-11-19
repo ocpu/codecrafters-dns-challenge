@@ -1,4 +1,4 @@
-use std::{fmt::Display, hash::Hash, ops::Deref, marker::PhantomData, sync::Arc};
+use std::{fmt::Display, hash::Hash, marker::PhantomData, ops::Deref, sync::Arc};
 
 #[derive(Debug)]
 pub struct UnknownType(u16);
@@ -311,10 +311,6 @@ impl<'a> TryFrom<&'a [u8]> for DomainName<'a> {
 }
 
 impl<'a> DomainName<'a> {
-    pub fn len_in_packet(&self) -> usize {
-        1 + self.0.iter().map(|part| part.len() + 1).sum::<usize>()
-    }
-
     pub fn from_parts(parts: Box<[&'a str]>) -> Self {
         Self(parts)
     }
@@ -337,13 +333,13 @@ impl<'a> DomainName<'a> {
                     break;
                 }
                 if i > MAX_LABEL_SIZE {
-                    return Err(DomainNameParseError::LabelTooLarge)
+                    return Err(DomainNameParseError::LabelTooLarge);
                 }
                 match bytes[offset + i] {
                     b'.' => break,
                     b'A'..=b'Z' | b'a'..=b'z' => {}
                     b'-' | b'0'..=b'9' if i != 0 => {}
-                    _ => return Err(DomainNameParseError::IllegalLabel)
+                    _ => return Err(DomainNameParseError::IllegalLabel),
                 }
                 i += 1;
             }
@@ -351,10 +347,20 @@ impl<'a> DomainName<'a> {
                 break;
             }
             let (should_continue, part) = match bytes.get(offset + i) {
-                None if bytes[offset + i - 1] == b'-' => return Err(DomainNameParseError::IllegalLabel),
-                Some(b'.') if bytes[offset + i - 1] == b'-' => return Err(DomainNameParseError::IllegalLabel),
-                Some(b'.') => (true, std::str::from_utf8(&bytes[offset..offset + i]).unwrap()),
-                None => (false, std::str::from_utf8(&bytes[offset..offset + i]).unwrap()),
+                None if bytes[offset + i - 1] == b'-' => {
+                    return Err(DomainNameParseError::IllegalLabel)
+                }
+                Some(b'.') if bytes[offset + i - 1] == b'-' => {
+                    return Err(DomainNameParseError::IllegalLabel)
+                }
+                Some(b'.') => (
+                    true,
+                    std::str::from_utf8(&bytes[offset..offset + i]).unwrap(),
+                ),
+                None => (
+                    false,
+                    std::str::from_utf8(&bytes[offset..offset + i]).unwrap(),
+                ),
                 Some(_) => return Err(DomainNameParseError::IllegalLabel),
             };
             parts.push(part);
@@ -368,11 +374,21 @@ impl<'a> DomainName<'a> {
     }
 
     pub fn into_owned(self) -> DomainNameOwned {
-        DomainNameOwned(self.0.iter().map(|part| Box::from(*part)).collect::<Vec<_>>().into_boxed_slice())
+        DomainNameOwned(
+            self.0
+                .iter()
+                .map(|part| Box::from(*part))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )
     }
 }
 
 impl DomainNameOwned {
+    pub fn len_in_packet(&self) -> usize {
+        1 + self.0.iter().map(|part| part.len() + 1).sum::<usize>()
+    }
+
     pub fn parts(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(|part| part.deref().as_ref())
     }
@@ -383,6 +399,10 @@ impl DomainNameOwned {
 }
 
 impl<'a> DomainName<'a> {
+    pub fn len_in_packet(&self) -> usize {
+        1 + self.0.iter().map(|part| part.len() + 1).sum::<usize>()
+    }
+
     pub fn parts(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(|part| part.as_ref())
     }
@@ -397,14 +417,19 @@ enum CowPartIter<'a, 'b, O, B> {
     Borrowed(B, PhantomData<&'a ()>, PhantomData<&'b ()>),
 }
 
-impl<'a, 'b, O, B> Iterator for CowPartIter<'a, 'b, O, B> where 'b: 'a, O: Iterator<Item = &'a Box<str>>, B: Iterator<Item = &'a &'b str> {
+impl<'a, 'b, O, B> Iterator for CowPartIter<'a, 'b, O, B>
+where
+    'b: 'a,
+    O: Iterator<Item = &'a Box<str>>,
+    B: Iterator<Item = &'a &'b str>,
+{
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Owned(iter, _) => match iter.next() {
                 None => None,
-                Some(part) => Some((*part).as_ref())
+                Some(part) => Some((*part).as_ref()),
             },
             Self::Borrowed(iter, _, _) => iter.next().copied(),
         }
@@ -412,10 +437,17 @@ impl<'a, 'b, O, B> Iterator for CowPartIter<'a, 'b, O, B> where 'b: 'a, O: Itera
 }
 
 impl<'a> CowDomainName<'a> {
+    pub fn len_in_packet(&self) -> usize {
+        match self {
+            Self::Owned(name) => name.len_in_packet(),
+            Self::Borrowed(name) => name.len_in_packet(),
+        }
+    }
+
     pub fn parts(&self) -> impl Iterator<Item = &str> {
         match self {
-            Self::Borrowed(name) => CowPartIter::Borrowed(name.0.iter(), PhantomData, PhantomData),
             Self::Owned(name) => CowPartIter::Owned(name.0.iter(), PhantomData),
+            Self::Borrowed(name) => CowPartIter::Borrowed(name.0.iter(), PhantomData, PhantomData),
         }
     }
 
@@ -516,5 +548,34 @@ impl<'a> Hash for CowDomainName<'a> {
             CowDomainName::Owned(name) => name.hash(state),
             CowDomainName::Borrowed(name) => name.hash(state),
         }
+    }
+}
+
+pub enum CowData<'a> {
+    Owned(Box<[u8]>),
+    Borrowed(&'a [u8]),
+}
+
+impl<'a> CowData<'a> {
+    pub const fn len(&self) -> usize {
+        match self {
+            Self::Owned(data) => data.len(),
+            Self::Borrowed(data) => data.len(),
+        }
+    }
+}
+
+impl<'a> AsRef<[u8]> for CowData<'a> {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Owned(data) => data.as_ref(),
+            Self::Borrowed(data) => data,
+        }
+    }
+}
+
+impl<'a> From<&'a [u8]> for CowData<'a> {
+    fn from(value: &'a [u8]) -> Self {
+        CowData::Borrowed(value)
     }
 }

@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::types::{DomainName, DomainNameParseError, QClass, QType, CowDomainName};
+use crate::types::{CowDomainName, DomainName, DomainNameParseError, QClass, QType};
 
 pub struct Question<'a> {
     name: CowDomainName<'a>,
@@ -17,7 +17,7 @@ pub enum QuestionParseError {
 }
 
 impl<'a> Question<'a> {
-    pub fn new(name: CowDomainName<'a>, q_type: QType, q_class: QClass) -> Self {
+    pub fn new(q_type: QType, q_class: QClass, name: CowDomainName<'a>) -> Self {
         Self {
             name,
             q_type,
@@ -35,6 +35,10 @@ impl<'a> Question<'a> {
 
     pub fn q_class(&self) -> &QClass {
         &self.q_class
+    }
+
+    pub fn len_in_packet(&self) -> usize {
+        4 + self.name.len_in_packet()
     }
 
     pub fn try_parse(buffer: &'a [u8]) -> Result<(Self, usize), QuestionParseError> {
