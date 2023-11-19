@@ -56,12 +56,16 @@ fn main() {
         });
 
         for q in packet.questions() {
+            println!("Question: {q}");
             builder =
                 builder.add_question(Question::new(*q.q_type(), *q.q_class(), q.name().clone()));
-            builder = match map.get(q.name()) {
+            builder = builder.add_answer(
+                ARecord::new(500, Ipv4Addr::new(8, 8, 8, 8)).to_resource(q.name().clone()),
+            );
+            /*builder = match map.get(q.name()) {
                 Some(record) => builder.add_answer(record.to_resource(q.name().clone())),
                 None => builder,
-            }
+            }*/
         }
 
         let (_response_header, resp_size) = builder
