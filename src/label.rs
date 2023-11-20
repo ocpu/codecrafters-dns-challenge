@@ -47,17 +47,17 @@ impl<'data> Label<'data> {
         };
         let len = if len == 0 {
             return Ok((1, End));
-        } else if offset + 1 + (len as usize) > buffer.len() {
-            return Err(BufferTooSmall {
-                remaining_len: buffer.len() - offset,
-                expected_len: len as usize,
-            });
         } else if let Some(pointer) = label_pointer(&len) {
             let pointer_lower = *buffer.get(offset + 1).ok_or_else(|| BufferTooSmall {
                 remaining_len: buffer.len() - offset,
                 expected_len: 2,
             })? as usize;
             return Ok((2, Pointer((pointer << 8) + pointer_lower)));
+        } else if offset + 1 + (len as usize) > buffer.len() {
+            return Err(BufferTooSmall {
+                remaining_len: buffer.len() - offset,
+                expected_len: len as usize,
+            });
         } else if (len as usize) > MAX_LABEL_SIZE {
             return Err(LabelTooLarge(len as usize));
         } else {
