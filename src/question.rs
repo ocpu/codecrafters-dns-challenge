@@ -1,9 +1,12 @@
 use std::fmt::Display;
 
-use crate::types::{CowDomainName, DomainName, DomainNameParseError, QClass, QType};
+use crate::{
+    domain_name::{DomainName, DomainNameParseError},
+    types::{QClass, QType, UnknownClass, UnknownType},
+};
 
 pub struct Question<'a> {
-    name: CowDomainName<'a>,
+    name: DomainName<'a>,
     q_type: QType,
     q_class: QClass,
 }
@@ -11,13 +14,31 @@ pub struct Question<'a> {
 #[derive(Debug)]
 pub enum QuestionParseError {
     DomainName(DomainNameParseError),
-    UnknownQType,
-    UnkonwnQClass,
+    UnknownQType(u16),
+    UnknownQClass(u16),
     EOF,
 }
 
+impl From<DomainNameParseError> for QuestionParseError {
+    fn from(value: DomainNameParseError) -> Self {
+        Self::DomainName(value)
+    }
+}
+
+impl From<UnknownType> for QuestionParseError {
+    fn from(value: UnknownType) -> Self {
+        Self::UnknownQType(value.0)
+    }
+}
+
+impl From<UnknownClass> for QuestionParseError {
+    fn from(value: UnknownClass) -> Self {
+        Self::UnknownQClass(value.0)
+    }
+}
+
 impl<'a> Question<'a> {
-    pub fn new(q_type: QType, q_class: QClass, name: CowDomainName<'a>) -> Self {
+    pub fn new(q_type: QType, q_class: QClass, name: DomainName<'a>) -> Self {
         Self {
             name,
             q_type,
@@ -25,7 +46,7 @@ impl<'a> Question<'a> {
         }
     }
 
-    pub fn name(&self) -> &CowDomainName<'a> {
+    pub fn name(&self) -> &DomainName<'a> {
         &self.name
     }
 
@@ -41,26 +62,32 @@ impl<'a> Question<'a> {
         4 + self.name.len_in_packet()
     }
 
-    pub fn try_parse(buffer: &'a [u8]) -> Result<(Self, usize), QuestionParseError> {
-        let name: DomainName<'a> = buffer
-            .try_into()
-            .map_err(|e| QuestionParseError::DomainName(e))?;
-        let size = name.len_in_packet();
-        if size + 4 > buffer.len() {
+    pub fn try_parse(
+        buffer: &'a [u8],
+        offset: usize,
+    ) -> Result<Option<(Self, usize)>, QuestionParseError> {
+        let Some((name, name_size)) = DomainName::try_parse(&buffer, offset)? else {
+            return Ok(None);
+        };
+        if offset + name_size + 4 > buffer.len() {
             return Err(QuestionParseError::EOF);
         }
-        let q_type = QType::try_from(u16::from_be_bytes([buffer[size], buffer[size + 1]]))
-            .map_err(|_| QuestionParseError::UnknownQType)?;
-        let q_class = QClass::try_from(u16::from_be_bytes([buffer[size + 2], buffer[size + 3]]))
-            .map_err(|_| QuestionParseError::UnkonwnQClass)?;
-        Ok((
+        let q_type = QType::try_from(u16::from_be_bytes([
+            buffer[offset + name_size],
+            buffer[offset + name_size + 1],
+        ]))?;
+        let q_class = QClass::try_from(u16::from_be_bytes([
+            buffer[offset + name_size + 2],
+            buffer[offset + name_size + 3],
+        ]))?;
+        Ok(Some((
             Self {
-                name: name.into(),
+                name,
                 q_type,
                 q_class,
             },
-            size + 4,
-        ))
+            name_size + 4,
+        )))
     }
 }
 

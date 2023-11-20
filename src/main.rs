@@ -1,15 +1,17 @@
+mod domain_name;
 mod header;
+mod label;
 mod packet;
 mod question;
 mod resource;
 mod types;
 
 use crate::{
+    domain_name::DomainName,
     header::{Opcode, ResponseCode},
     packet::DNSPacket,
     question::Question,
     resource::ARecord,
-    types::{CowDomainName, DomainName},
 };
 use std::{
     collections::HashMap,
@@ -22,7 +24,7 @@ fn main() {
     println!("Logs from your program will appear here!");
     let mut map = HashMap::new();
     map.insert(
-        CowDomainName::Borrowed(DomainName::from_str("codecrafters.io").unwrap()),
+        DomainName::from_static("codecrafters.io"),
         ARecord::new(500, Ipv4Addr::new(8, 8, 8, 8)),
     );
 
