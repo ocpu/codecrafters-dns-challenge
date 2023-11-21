@@ -41,9 +41,9 @@ fn main() {
         };
         let span = tracing::trace_span!("dns_request", source = %source);
         let _guard = span.enter();
-        if cfg!(debug_assertions) {
+//        if cfg!(debug_assertions) {
             print_buffer("Input", &buf[..size]);
-        }
+//        }
         let packet = match DNSPacket::try_parse(&buf[..size]) {
             Ok(packet) => packet,
             Err(e) => {
@@ -84,19 +84,19 @@ fn main() {
             .build_into(&mut response[..])
             .expect("TODO: split response?");
 
-        if cfg!(debug_assertions) {
+//        if cfg!(debug_assertions) {
             print_buffer("Output", &response[..resp_size]);
-        }
+//        }
         udp_socket
             .send_to(&response[..resp_size], source)
             .expect("Failed to send response");
     }
 }
 
-#[cfg(debug_assertions)]
+//#[cfg(debug_assertions)]
 const LINE_ITEM_COUNT: usize = 16;
 
-#[cfg(debug_assertions)]
+//#[cfg(debug_assertions)]
 fn print_buffer(label: &str, mut buffer: &[u8]) {
     use nom::AsChar;
 
