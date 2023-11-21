@@ -150,6 +150,11 @@ impl<'a> DNSPacketBuilder<'a> {
         self
     }
 
+    pub fn disable_compression(mut self) -> Self {
+        self.compress = false;
+        self
+    }
+
     pub fn build_into<'b>(
         self,
         out_buffer: &'b mut [u8],

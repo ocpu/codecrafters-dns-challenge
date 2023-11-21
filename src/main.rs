@@ -81,6 +81,7 @@ fn main() {
         }
 
         let (_response_header, resp_size) = builder
+            .disable_compression()
             .build_into(&mut response[..])
             .expect("TODO: split response?");
 
