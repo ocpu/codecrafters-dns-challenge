@@ -1,142 +1,68 @@
-use std::net::Ipv4Addr;
+use std::{net::{Ipv4Addr, Ipv6Addr}, sync::Arc};
 
-use crate::{
-    domain_name::{DomainName, DomainNameParseError},
-    types::{Class, CowData, Type, UnknownClass, UnknownType},
-};
+use crate::{proto::{Class, Type}, domain_name::DomainName, types::CowData};
 
-pub struct Resource<'a> {
-    name: DomainName<'a>,
-    typ: Type,
-    class: Class,
-    ttl: u32,
-    data: CowData<'a>,
+pub struct Resource(pub DomainName, pub ResourceData);
+
+#[derive(Debug, Clone)]
+pub enum ResourceData {
+    A {
+        ttl: u32,
+        addr: Ipv4Addr,
+    },
+    //AAAA {
+    //    ttl: u32,
+    //    addr: Ipv6Addr,
+    //},
+    Generic {
+        typ: Type,
+        class: Class,
+        ttl: u32,
+        data: Arc<[u8]>,
+    },
 }
 
-#[derive(Debug)]
-pub enum ResourceParseError {
-    DomainName(DomainNameParseError),
-    UnknownType(u16),
-    UnknownClass(u16),
-    EOF,
-}
-
-impl From<DomainNameParseError> for ResourceParseError {
-    fn from(value: DomainNameParseError) -> Self {
-        Self::DomainName(value)
-    }
-}
-
-impl From<UnknownType> for ResourceParseError {
-    fn from(value: UnknownType) -> Self {
-        Self::UnknownType(value.0)
-    }
-}
-
-impl From<UnknownClass> for ResourceParseError {
-    fn from(value: UnknownClass) -> Self {
-        Self::UnknownClass(value.0)
-    }
-}
-
-impl<'a> Resource<'a> {
-    pub fn new(name: DomainName<'a>, typ: Type, class: Class, ttl: u32, data: CowData<'a>) -> Self {
-        Self {
-            name,
-            typ,
-            class,
-            ttl,
-            data,
+impl ResourceData {
+    pub fn class(&self) -> &Class {
+        match self {
+            Self::A { .. } => &Class::IN,
+            //Self::AAAA { .. } => &Class::IN,
+            Self::Generic { class, .. } => class,
         }
-    }
-
-    pub fn name(&self) -> &DomainName<'a> {
-        &self.name
     }
 
     pub fn typ(&self) -> &Type {
-        &self.typ
-    }
-
-    pub fn class(&self) -> &Class {
-        &self.class
+        match self {
+            Self::A { .. } => &Type::A,
+            //Self::AAAA { .. } => &Type::AAAA,
+            Self::Generic { typ, .. } => typ,
+        }
     }
 
     pub fn ttl(&self) -> &u32 {
-        &self.ttl
-    }
-
-    pub fn data(&self) -> &[u8] {
-        &self.data.as_ref()
-    }
-
-    pub fn len_in_packet(&self) -> usize {
-        10 + self.name.len_in_packet() + self.data.len()
-    }
-
-    pub fn try_parse(
-        buffer: &'a [u8],
-        offset: usize,
-    ) -> Result<Option<(Self, usize)>, ResourceParseError> {
-        let Some((name, name_size)) = DomainName::try_parse(buffer, offset)? else {
-            return Ok(None);
-        };
-        if offset + name_size + 10 > buffer.len() {
-            return Err(ResourceParseError::EOF);
+        match self {
+            Self::A { ttl, .. } => ttl,
+            //Self::AAAA { ttl, .. } => ttl,
+            Self::Generic { ttl, .. } => ttl,
         }
-        let typ = Type::try_from(u16::from_be_bytes([
-            buffer[offset + name_size],
-            buffer[offset + name_size + 1],
-        ]))?;
-        let class = Class::try_from(u16::from_be_bytes([
-            buffer[offset + name_size + 2],
-            buffer[offset + name_size + 3],
-        ]))?;
-        let ttl = u32::from_be_bytes([
-            buffer[offset + name_size + 4],
-            buffer[offset + name_size + 5],
-            buffer[offset + name_size + 6],
-            buffer[offset + name_size + 7],
-        ]);
-        let data_length = u16::from_be_bytes([
-            buffer[offset + name_size + 8],
-            buffer[offset + name_size + 9],
-        ]) as usize;
-        if offset + name_size + 10 + data_length > buffer.len() {
-            return Err(ResourceParseError::EOF);
+    }
+
+    pub fn data(&self) -> CowData<'_> {
+        match self {
+            Self::A { addr, .. } => CowData::Owned(Arc::from(addr.octets())),
+            //Self::AAAA { addr, .. } => &addr.octets(),
+            Self::Generic { data, .. } => CowData::Owned(Arc::clone(&data)),
         }
-        Ok(Some((
-            Self {
-                name: name.into(),
-                typ,
-                class,
-                ttl,
-                data: CowData::Borrowed(
-                    &buffer[offset + name_size + 10..offset + name_size + 10 + data_length],
-                ),
-            },
-            name_size + 10 + data_length,
-        )))
     }
 }
 
-pub struct ARecord {
-    ttl: u32,
-    addr: Ipv4Addr,
-}
-
-impl ARecord {
-    pub fn new(ttl: u32, addr: Ipv4Addr) -> Self {
-        Self { ttl, addr }
-    }
-
-    pub fn to_resource<'a>(&self, name: DomainName<'a>) -> Resource<'a> {
-        Resource::new(
-            name,
-            Type::A,
-            Class::IN,
-            self.ttl,
-            CowData::Owned(Box::from(self.addr.octets())),
-        )
+impl<'data> From<crate::proto::Resource<'data>> for ResourceData {
+    fn from(value: crate::proto::Resource<'data>) -> Self {
+        ResourceData::Generic {
+            typ: value.typ(),
+            class: value.class(),
+            ttl: value.ttl(),
+            data: Arc::from(value.data())
+        }
     }
 }

@@ -1,158 +1,187 @@
-use std::{fmt::Display, hash::Hash, rc::Rc};
+use std::{fmt::Display, hash::Hash, sync::Arc};
 
-use crate::label::{Label, LabelParseError, LabelParseResult};
+use thiserror::Error;
+
+use crate::{label::{Label, LabelParseError}, proto};
 
 const MAX_NAME_SIZE: usize = 255;
 
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct DomainName<'a>(Rc<[Label<'a>]>);
-
 #[derive(Debug)]
+pub enum DomainName {
+    Static(usize, &'static str),
+    Boxed(Arc<[Label]>),
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub enum DomainNameIter<'a> {
+    Static { cursor: usize, str: &'static str },
+    Boxed { index: usize, slice: &'a [Label] },
+}
+
+#[derive(Debug, Error)]
 pub enum DomainNameParseError {
-    NameTooLarge,
-    Label(LabelParseError),
-    CyclicPointers,
+    #[error("Domain label is too long. Maximum length is 255 got {0}.")]
+    NameTooLong(usize),
+    #[error(transparent)]
+    Label(#[from] LabelParseError),
 }
 
-impl From<LabelParseError> for DomainNameParseError {
-    fn from(value: LabelParseError) -> Self {
-        Self::Label(value)
-    }
-}
-
-impl<'a> DomainName<'a> {
-    pub fn new(labels: Rc<[Label<'a>]>) -> Self {
-        Self(labels)
+impl DomainName {
+    pub fn new(labels: Arc<[Label]>) -> Self {
+        Self::Boxed(labels)
     }
 
-    pub fn from_static(str: &'static str) -> DomainName<'static> {
-        DomainName::from_str(str)
-            .expect("Failed to parse input string as domain name")
-            .expect("Input string was empty")
-    }
-
-    pub fn from_str(s: &'a str) -> Result<Option<Self>, DomainNameParseError> {
-        let bytes = s.as_bytes();
-        if bytes.len() > MAX_NAME_SIZE {
-            return Err(DomainNameParseError::NameTooLarge);
+    pub fn from_static(str: &'static str) -> DomainName {
+        if str.len() > MAX_NAME_SIZE {
+            panic!("{}", DomainNameParseError::NameTooLong(str.len()));
         }
-        if bytes.len() == 0 {
-            return Ok(None);
-        }
-        let mut labels = Vec::new();
+
+        let b = str.as_bytes();
         let mut len = 0;
-        let mut str = s;
-        loop {
-            match Label::from_str(&str) {
-                Err(e) => return Err(DomainNameParseError::Label(e)),
-                Ok(LabelParseResult::End) => break,
-                Ok(LabelParseResult::Pointer(pointer)) => {
-                    return Err(DomainNameParseError::Label(
-                        LabelParseError::IllegalLabelChar((pointer as u8) & 0xc0),
-                    ))
-                }
-                Ok(LabelParseResult::Label(label)) => {
-                    let label_len = label.len();
-                    labels.push(label);
-                    if len != 0 {
-                        len += 1;
-                    }
-                    len += label_len;
-                    if len > MAX_NAME_SIZE {
-                        return Err(DomainNameParseError::NameTooLarge);
-                    }
-                    if let Some(&c) = &str.as_bytes().get(label_len) {
-                        if c != b'.' {
-                            return Err(DomainNameParseError::Label(
-                                LabelParseError::IllegalLabelChar(c),
-                            ));
-                        } else {
-                            str = &str[label_len + 1..];
-                        }
-                    } else {
-                        break;
-                    }
-                }
+        let mut cursor = 0;
+        let mut last_used = 0;
+
+        while cursor < b.len() {
+            if b[cursor] == b'.' {
+                Label::valudate_label(&b[last_used..cursor]).unwrap();
+                last_used = cursor + 1;
+                len += 1;
             }
+            cursor += 1;
         }
-        Ok(Some(Self(Rc::from(labels))))
+        if cursor - last_used > 0 {
+            Label::valudate_label(&b[last_used..cursor]).unwrap();
+            len += 1;
+        }
+
+        DomainName::Static(len, str)
     }
 
-    pub fn try_parse(
-        buffer: &'a [u8],
-        offset: usize,
-    ) -> Result<Option<(Self, usize)>, DomainNameParseError> {
-        use DomainNameParseError::*;
-
-        if buffer.len() - offset == 0 {
-            return Ok(None);
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Static(len, _) => *len,
+            Self::Boxed(labels) => labels.len(),
         }
-        let mut cursor = offset;
-        let mut len = 0;
-        let mut size = 0;
+    }
+
+    pub fn labels(&self) -> DomainNameIter<'_> {
+        match self {
+            Self::Static(_, s) => DomainNameIter::Static { cursor: 0, str: s },
+            Self::Boxed(labels) => DomainNameIter::Boxed {
+                index: 0,
+                slice: &labels,
+            },
+        }
+    }
+
+    pub fn equals(&self, other: &proto::DomainName<'_>) -> bool {
+        self.len() == other.len() && self.labels().zip(other.iter()).all(|(a, b)| a.eq_ignore_ascii_case(&b))
+    }
+}
+
+impl core::str::FromStr for DomainName {
+    type Err = DomainNameParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() > MAX_NAME_SIZE {
+            return Err(DomainNameParseError::NameTooLong(s.len()));
+        }
+        let b = s.as_bytes();
         let mut labels = Vec::new();
-        let mut seen_pointers = Vec::new();
-        loop {
-            match self::Label::try_parse(buffer, cursor)? {
-                (label_size, LabelParseResult::Label(label)) => {
-                    cursor += label_size;
-                    let label_len = label.len();
-                    labels.push(label);
-                    if seen_pointers.is_empty() {
-                        size += label_size;
-                    }
-                    if len != 0 {
-                        len += 1;
-                    }
-                    len += label_len;
-                    if len > MAX_NAME_SIZE {
-                        return Err(NameTooLarge);
-                    }
-                }
-                (pointer_size, LabelParseResult::Pointer(pointer)) => {
-                    cursor = pointer;
-                    if seen_pointers.is_empty() {
-                        size += pointer_size;
-                    }
-                    if seen_pointers.contains(&pointer) {
-                        return Err(CyclicPointers);
-                    } else {
-                        seen_pointers.push(pointer);
-                    }
-                }
-                (end_size, LabelParseResult::End) => {
-                    if seen_pointers.is_empty() {
-                        size += end_size;
-                    }
-                    break;
-                }
+        let mut cursor = 0;
+        let mut last_used = 0;
+
+        while cursor < b.len() {
+            if b[cursor] == b'.' {
+                Label::valudate_label(&b[last_used..cursor])?;
+                labels.push(Label::new(&s[last_used..cursor]));
+                last_used = cursor + 1;
             }
+            cursor += 1;
         }
-        Ok(Some((Self(Rc::from(labels)), size)))
+        if cursor - last_used > 0 {
+            Label::valudate_label(&b[last_used..cursor])?;
+            labels.push(Label::new(&s[last_used..cursor]));
+        }
+
+        Ok(Self::Boxed(Arc::from(labels)))
     }
 }
 
-impl<'a> DomainName<'a> {
-    pub fn len_in_packet(&self) -> usize {
-        1 + self.0.iter().map(|part| part.len() + 1).sum::<usize>()
-    }
-
-    pub fn labels(&self) -> &[Label<'a>] {
-        &self.0
+impl<'a> From<&crate::proto::DomainName<'a>> for DomainName {
+    fn from(value: &crate::proto::DomainName<'a>) -> Self {
+        let list: Vec<_> = value.iter().map(Label::new).collect();
+        Self::Boxed(Arc::from(list.into_boxed_slice()))
     }
 }
 
-impl<'a> Display for DomainName<'a> {
+impl Display for DomainName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for item in self.0.as_ref() {
+        for item in self.labels() {
             write!(f, "{item}.")?;
         }
         Ok(())
     }
 }
 
-impl<'a> Clone for DomainName<'a> {
+impl Clone for DomainName {
     fn clone(&self) -> Self {
-        Self(Rc::clone(&self.0))
+        match self {
+            Self::Static(len, s) => Self::Static(*len, s),
+            Self::Boxed(a) => Self::Boxed(Arc::clone(&a)),
+        }
+    }
+}
+
+impl Hash for DomainName {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.labels().for_each(|label| Hash::hash(&label, state));
+    }
+}
+
+impl PartialEq for DomainName {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.labels().eq(other.labels())
+    }
+}
+
+impl Eq for DomainName {}
+
+impl<'a> Iterator for DomainNameIter<'a> {
+    type Item = Label;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Boxed { ref mut index, slice } => {
+                let Some(res) = slice.get(*index) else {
+                    return None;
+                };
+                *index += 1;
+                Some(res.clone())
+            }
+            Self::Static { ref mut cursor, ref str } => {
+                if *cursor >= str.len() {
+                    return None;
+                }
+                let b = &str.as_bytes();
+                let start = *cursor;
+
+                while *cursor < b.len() {
+                    if b[*cursor] == b'.' {
+                        // SAFETY: Already checked in DomainName::from_static.
+                        let res = unsafe { Label::from_static_unchecked(&str[start..*cursor]) };
+                        *cursor += 1;
+                        return Some(res);
+                    }
+                    *cursor += 1;
+                }
+                if b.len() > 0 {
+                    // SAFETY: Already checked in DomainName::from_static.
+                    Some(unsafe {Label::from_static_unchecked(&str[start..str.len()]) })
+                } else {
+                    None
+                }
+            }
+        }
     }
 }

@@ -1,312 +1,229 @@
+use std::{collections::hash_map::DefaultHasher, hash::Hasher};
+
+use bytes::BufMut;
+
 use crate::{
+    array_buffer::ArrayBuffer,
     domain_name::DomainName,
-    header::{Header, HeaderParseError, PacketType, ResponseCode},
-    label::Label,
-    question::{Question, QuestionParseError},
-    resource::{Resource, ResourceParseError},
-    types::CowData,
+    header::Header,
+    proto::{PacketType, ResponseCode, Opcode, HeaderView},
+    question::Question,
+    resource::Resource,
 };
 
-pub struct DNSPacket<'a> {
+pub struct DNSPacketBuilder {
     header: Header,
-    questions: Box<[Question<'a>]>,
-    _answers: Box<[Resource<'a>]>,
-}
-
-pub struct DNSPacketBuilder<'a> {
-    header: Header,
-    questions: Vec<Question<'a>>,
-    answers: Vec<Resource<'a>>,
+    questions: Vec<Question>,
+    answers: Vec<Resource>,
     compress: bool,
 }
 
-#[derive(Debug)]
-pub enum DNSPacketParseError {
-    Header(HeaderParseError),
-    NoQuestionFound,
-    Question(QuestionParseError),
-    NoAnswerFound,
-    Answer(ResourceParseError),
-}
-
-fn get_entry_vec<T>(entries: u16) -> Vec<T> {
-    if entries > 10 {
-        vec![]
-    } else {
-        Vec::with_capacity(entries.into())
-    }
-}
-
-impl<'a> DNSPacket<'a> {
-    pub fn new(id: u16) -> Self {
-        Self {
-            header: Header::new(id),
-            questions: Vec::new().into_boxed_slice(),
-            _answers: Vec::new().into_boxed_slice(),
-        }
-    }
-
-    pub fn header(&self) -> &Header {
-        &self.header
-    }
-
-    pub fn questions(&self) -> &[Question<'a>] {
-        &self.questions
-    }
-    /*
-        pub fn answers(&self) -> &[Resource<'a>] {
-            &self.answers
-        }
-    */
-    pub fn try_parse_header_only(buffer: &'a [u8]) -> Option<DNSPacket<'a>> {
-        let header = match Header::try_from(buffer) {
-            Ok(header) => header,
-            Err(_) if buffer.len() >= 2 => Header::new(u16::from_be_bytes([buffer[0], buffer[1]])),
-            Err(_) => return None,
-        };
-        Some(Self {
-            header,
-            questions: Vec::new().into_boxed_slice(),
-            _answers: Vec::new().into_boxed_slice(),
-        })
-    }
-
-    pub fn try_parse(buffer: &'a [u8]) -> Result<Self, DNSPacketParseError> {
-        let header =
-            Header::try_from(&buffer[..Header::SIZE]).map_err(DNSPacketParseError::Header)?;
-
-        let mut questions = get_entry_vec(header.question_entries);
-        let mut answers = get_entry_vec(header.answer_entries);
-
-        let mut offset = Header::SIZE;
-
-        for _ in 0..header.question_entries {
-            let (question, len) = Question::try_parse(&buffer, offset)
-                .map_err(DNSPacketParseError::Question)?
-                .ok_or(DNSPacketParseError::NoQuestionFound)?;
-            offset += len;
-            questions.push(question);
-        }
-
-        for _ in 0..header.answer_entries {
-            let (answer, len) = Resource::try_parse(&buffer, offset)
-                .map_err(DNSPacketParseError::Answer)?
-                .ok_or(DNSPacketParseError::NoAnswerFound)?;
-            offset += len;
-            answers.push(answer);
-        }
-
-        Ok(Self {
-            header,
-            questions: questions.into_boxed_slice(),
-            _answers: answers.into_boxed_slice(),
-        })
-    }
-
-    pub fn respond(&self, code: ResponseCode) -> DNSPacketBuilder<'a> {
-        let mut header = Header::new(self.header.id);
-        header.opcode = self.header.opcode;
-        header.recursion_desired = self.header.recursion_desired;
+impl DNSPacketBuilder {
+    pub fn respond<'data>(packet: &crate::proto::Packet<'data>, code: ResponseCode) -> Self {
+        let mut header = Header::new(packet.header().id());
+        header.opcode = packet.header().opcode();
+        header.recursion_desired = packet.header().recursion_desired();
         header.packet_type = PacketType::Response;
         header.response_code = code;
-        DNSPacketBuilder {
+
+        Self {
             header,
             questions: Vec::new(),
             answers: Vec::new(),
             compress: true,
         }
     }
-    /*
-        pub fn respond_ok(&self) -> DNSPacketBuilder<'a> {
-            self.respond(ResponseCode::None)
+
+    pub fn respond_to(header: HeaderView, code: ResponseCode) -> Self {
+        let mut h = Header::new(header.id().unwrap_or_default());
+        h.opcode = Opcode::Query;
+        h.recursion_desired = header.recursion_desired().unwrap_or_default();
+        h.packet_type = PacketType::Response;
+        h.response_code = code;
+
+        Self {
+            header: h,
+            questions: Vec::new(),
+            answers: Vec::new(),
+            compress: true,
         }
+    }
 
-        pub fn query(id: u16) -> DNSPacketBuilder<'a> {
-            let header = Header::new(id);
-            DNSPacketBuilder {
-                header,
-                questions: Vec::new(),
-                answers: Vec::new(),
-            }
+    pub fn query(id: u16) -> Self {
+        let mut header = Header::new(id);
+        header.opcode = Opcode::Query;
+        header.recursion_desired = true;
+        header.packet_type = PacketType::Query;
+
+        DNSPacketBuilder {
+            header,
+            compress: true,
+            questions: Vec::new(),
+            answers: Vec::new(),
         }
-    */
-}
+    }
 
-#[derive(Debug)]
-pub enum WritePacketError {
-    TooLarge,
-}
-
-impl<'a> DNSPacketBuilder<'a> {
-    pub fn add_question(mut self, question: Question<'a>) -> Self {
+    pub fn add_question(mut self, question: Question) -> Self {
         self.questions.push(question);
         self.header.question_entries += 1;
         self
     }
 
-    pub fn add_answer(mut self, answer: Resource<'a>) -> Self {
+    pub fn add_answer(mut self, answer: Resource) -> Self {
         self.answers.push(answer);
         self.header.answer_entries += 1;
         self
     }
 
-    pub fn disable_compression(mut self) -> Self {
-        self.compress = false;
-        self
-    }
-
-    pub fn build_into<'b>(
+    pub fn build_into<'a>(
         self,
-        out_buffer: &'b mut [u8],
-    ) -> Result<(DNSPacket<'b>, usize), WritePacketError> {
-        self.header.write_into(out_buffer);
+        buffer: &'a mut ArrayBuffer,
+    ) {
+        self.header.write_into(buffer);
 
-        let mut size = Header::SIZE;
-        let mut buffer = &mut out_buffer[Header::SIZE..];
-        let mut questions = Vec::with_capacity(self.questions.len());
-        let mut answers = Vec::with_capacity(self.answers.len());
-        let mut written_names: Vec<(DomainName<'b>, usize)> = Vec::new();
+        let mut written_names: Vec<(u64, usize)> = Vec::new();
+        let mut truncate = false;
 
         for question in self.questions {
-            if question.len_in_packet() > buffer.len() {
-                return Err(WritePacketError::TooLarge);
+            let start = buffer.len();
+            match write_name(buffer, question.name(), self.compress, &mut written_names) {
+                Ok(()) => {}
+                Err(TooLong) => {
+                    set_truncated(buffer, start);
+                    truncate = true;
+                    break;
+                }
+            };
+
+            if buffer.remaining_mut() < 4 {
+                set_truncated(buffer, start);
+                truncate = true;
+                break;
             }
 
-            let (name, buf) = write_name(
-                buffer,
-                &mut size,
-                question.name(),
-                self.compress,
-                &mut written_names,
-            );
-            buffer = buf;
-
-            let _ = &buffer[0..2].copy_from_slice(&question.q_type().as_u16().to_be_bytes());
-            let _ = &buffer[2..4].copy_from_slice(&question.q_class().as_u16().to_be_bytes());
-            buffer = &mut buffer[4..];
-
-            questions.push(Question::new(*question.q_type(), *question.q_class(), name));
-            size += 4;
+            buffer.put_u16(question.q_type().as_u16());
+            buffer.put_u16(question.q_class().as_u16());
         }
 
-        for answer in self.answers {
-            if answer.len_in_packet() > buffer.len() {
-                return Err(WritePacketError::TooLarge);
-            }
-
-            let (name, buf) = write_name(
-                buffer,
-                &mut size,
-                answer.name(),
-                self.compress,
-                &mut written_names,
-            );
-            buffer = buf;
-            let _ = &buffer[0..2].copy_from_slice(&answer.typ().as_u16().to_be_bytes());
-            let _ = &buffer[2..4].copy_from_slice(&answer.class().as_u16().to_be_bytes());
-            let _ = &buffer[4..8].copy_from_slice(&answer.ttl().to_be_bytes());
-            let _ = &buffer[8..10].copy_from_slice(&(answer.data().len() as u16).to_be_bytes());
-            let _ = &buffer[10..10 + answer.data().len()].copy_from_slice(answer.data());
-
-            let (data, buf) = buffer.split_at_mut(10 + answer.data().len());
-            buffer = buf;
-
-            answers.push(Resource::new(
-                name,
-                *answer.typ(),
-                *answer.class(),
-                *answer.ttl(),
-                CowData::Borrowed(&data[10..]),
-            ));
-            size += 10 + answer.data().len();
-        }
-
-        Ok((
-            DNSPacket {
-                header: self.header,
-                questions: questions.into_boxed_slice(),
-                _answers: answers.into_boxed_slice(),
-            },
-            size,
-        ))
+        truncate = truncate || write_resource_list(buffer, self.answers.into_iter(), self.compress, &mut written_names);
     }
 }
 
-fn write_name<'a, 'b>(
-    mut buffer: &'b mut [u8],
-    size: &mut usize,
-    domain_name: &DomainName<'a>,
-    compress: bool,
-    written_names: &mut Vec<(DomainName<'b>, usize)>,
-) -> (DomainName<'b>, &'b mut [u8]) {
-    if compress && written_names.iter().any(|(name, _)| name == domain_name) {
-        let (name, offset) = written_names
-            .iter()
-            .find(|(name, _)| name == domain_name)
-            .unwrap();
-        buffer[0] = (((*offset >> 8) as u8) & 0x3f) | 0xc0;
-        buffer[1] = *offset as u8;
-        *size += 2;
-        (name.clone(), &mut buffer[2..])
-    } else {
-        let mut labels = domain_name.labels();
-        let mut domain_labels = Vec::with_capacity(domain_name.labels().len());
-        let mut pointer = 0;
-        loop {
-            if labels.is_empty() {
-                break;
+fn set_truncated(buffer: &mut ArrayBuffer, new_len: usize) {
+    buffer.set_len(new_len);
+    buffer.as_slice_mut()[2] |= 2;
+}
+
+fn write_resource_list(buffer: &mut ArrayBuffer, iter: impl Iterator<Item = Resource>, compress: bool, written_names: &mut Vec<(u64, usize)>) -> bool {
+    for Resource(name, data) in iter {
+        let start = buffer.len();
+
+        match write_name(buffer, &name, compress, written_names) {
+            Ok(()) => {}
+            Err(TooLong) => {
+                set_truncated(buffer, start);
+                return true;
             }
-            // TODO: Check available space
-            buffer[0] = labels[0].len() as u8;
-            buffer[1..1 + labels[0].len()].copy_from_slice(labels[0].as_bytes());
+        };
 
-            let (string, buf) = buffer.split_at_mut(labels[0].len() + 1);
-            domain_labels.push(Label::new(std::str::from_utf8(&string[1..]).unwrap()));
-            buffer = buf;
-            *size += 1 + labels[0].len();
+        let dat = data.data();
+        if buffer.remaining_mut() < 10 + dat.len() {
+            set_truncated(buffer, start);
+            return true;
+        }
 
-            labels = &labels[1..];
-            if labels.is_empty() {
+        buffer.put_u16(data.typ().as_u16());
+        buffer.put_u16(data.class().as_u16());
+        buffer.put_u32(*data.ttl());
+        buffer.put_u16(dat.len() as u16);
+        buffer.put_slice(dat.as_ref());
+    }
+
+    return false;
+}
+
+struct TooLong;
+
+fn write_name(
+    buffer: &mut ArrayBuffer,
+    domain_name: &DomainName,
+    compress: bool,
+    written_names: &mut Vec<(u64, usize)>,
+) -> Result<(), TooLong> {
+    use std::hash::Hash;
+    let mut hasher = DefaultHasher::default();
+    domain_name.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    if compress && written_names.iter().any(|(name_hash, _)| *name_hash == hash) {
+        if buffer.remaining_mut() < 2 {
+            return Err(TooLong);
+        }
+        let (_, offset) = written_names
+            .iter()
+            .find(|(name_hash, _)| *name_hash == hash)
+            .unwrap();
+        buffer.put_u8((((*offset >> 8) as u8) & 0x3f) | 0xc0);
+        buffer.put_u8(*offset as u8);
+        Ok(())
+    } else {
+        let mut pointer = 0;
+        for (index, label) in domain_name.labels().enumerate() {
+            if buffer.remaining_mut() < 1 + label.len() {
+                return Err(TooLong);
+            }
+            buffer.put_u8(label.len() as u8);
+            buffer.put_slice(label.as_bytes());
+
+            if index + 1 == domain_name.len() {
                 break;
             }
             if compress {
-                let next_name: DomainName<'a> = DomainName::new(labels.into());
-                if let Some((name, offset)) =
-                    written_names.iter().find(|(name, _)| name == &next_name)
+                let next_hash = {
+                    let mut hasher = DefaultHasher::default();
+                    domain_name.labels().skip(index).for_each(|label| label.hash(&mut hasher));
+                    hasher.finish()
+                };
+
+                if let Some((_, offset)) =
+                    written_names.iter().find(|(name_hash, _)| *name_hash == next_hash)
                 {
-                    pointer = name.labels().len();
-                    buffer[0] = (((*offset >> 8) as u8) & 0x3f) | 0xc0;
-                    buffer[1] = *offset as u8;
-                    let name = name.clone();
-                    for label in name.labels() {
-                        domain_labels.push(label.clone());
+                    pointer = domain_name.len() - index;
+                    if buffer.remaining_mut() < 2 {
+                        return Err(TooLong);
                     }
-                    buffer = &mut buffer[2..];
-                    *size += 2;
+                    buffer.put_u8((((*offset >> 8) as u8) & 0x3f) | 0xc0);
+                    buffer.put_u8(*offset as u8);
                     break;
                 }
             }
         }
         if pointer == 0 {
-            buffer[0] = 0;
-            *size += 1;
-            buffer = &mut buffer[1..];
+            if buffer.remaining_mut() < 1 {
+                return Err(TooLong);
+            }
+            buffer.put_u8(0);
         }
 
         // 1 => 1..=1 = 1     | [1 - 1..]
         // 2 => 1..=2 = 1, 2  | [2 - 1..], [2 - 2..]
-        for i in 1..=domain_labels.len() - pointer {
-            let labels = &domain_labels[domain_labels.len() - pointer - i..];
+        for i in 1..=domain_name.len() - pointer {
+            let labels: Vec<_> = domain_name.labels().skip(domain_name.len() - i).collect();
 
             // The 1 here refers to the last "null" in the name sequence.
             // While the 1 in the map refers to the length byte.
-            let buffer_len: usize = 1 + labels[..labels.len() - pointer]
+            let buffer_len: usize = 1 + labels
                 .iter()
                 .map(|label| label.len() + 1)
                 .sum::<usize>();
-            written_names.push((DomainName::new(labels.into()), *size - buffer_len))
+            let hash = {
+                let mut hasher = DefaultHasher::default();
+                labels.iter().for_each(|label| label.hash(&mut hasher));
+                hasher.finish()
+            };
+            written_names.push((hash, buffer.len() - buffer_len))
         }
 
-        (DomainName::new(domain_labels.into()), buffer)
+        Ok(())
     }
 }

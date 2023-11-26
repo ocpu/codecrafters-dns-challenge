@@ -1,83 +1,59 @@
-use std::{fmt::Display, hash::Hash};
+use std::{fmt::Display, hash::Hash, sync::Arc};
+
+use thiserror::Error;
 
 const MAX_LABEL_SIZE: usize = 63;
 
-#[derive(Debug, Clone)]
-pub struct Label<'data>(&'data str);
-
 #[derive(Debug)]
+pub enum Label {
+    Boxed(Arc<str>),
+    Static(&'static str),
+}
+
+#[derive(Debug, Error)]
 pub enum LabelParseError {
-    NoLengthField,
-    LabelTooLarge(usize),
-    BufferTooSmall {
-        remaining_len: usize,
-        expected_len: usize,
-    },
-    IllegalLabelChar(u8),
+    #[error("Domain label is too long. Maximum length is 63 got {0}.")]
+    LabelTooLong(usize),
+    #[error(
+        "Domain label includes an illegal character at position {position}. {char} ({char:x?})"
+    )]
+    IllegalLabelChar { char: u8, position: usize },
 }
 
-pub enum LabelParseResult<'data> {
-    Label(Label<'data>),
-    Pointer(usize),
-    End,
-}
-
-impl<'data> Label<'data> {
-    pub const fn new(label: &'data str) -> Self {
-        Self(label)
+impl Label {
+    pub fn new(label: &str) -> Self {
+        Self::Boxed(Arc::from(label))
     }
 
-    pub const fn len(&self) -> usize {
-        self.0.len()
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Boxed(l) => l.len(),
+            Self::Static(l) => l.len(),
+        }
     }
 
-    pub const fn as_bytes(&self) -> &[u8] {
-        self.0.as_bytes()
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Boxed(l) => l.as_bytes(),
+            Self::Static(l) => l.as_bytes(),
+        }
     }
 
-    pub fn try_parse(
-        buffer: &'data [u8],
-        offset: usize,
-    ) -> Result<(usize, LabelParseResult<'data>), LabelParseError> {
+    pub fn from_static(s: &'static str) -> Self {
+        Self::valudate_label(s.as_bytes()).unwrap();
+        Self::Static(s)
+    }
+
+    pub const unsafe fn from_static_unchecked(s: &'static str) -> Self {
+        Self::Static(s)
+    }
+
+    pub const fn valudate_label(label_bytes: &[u8]) -> Result<(), LabelParseError> {
         use LabelParseError::*;
-        use LabelParseResult::*;
 
-        let Some(&len) = buffer.get(offset) else {
-            return Err(NoLengthField);
-        };
-        let len = if len == 0 {
-            return Ok((1, End));
-        } else if let Some(pointer) = label_pointer(&len) {
-            let pointer_lower = *buffer.get(offset + 1).ok_or_else(|| BufferTooSmall {
-                remaining_len: buffer.len() - offset,
-                expected_len: 2,
-            })? as usize;
-            return Ok((2, Pointer((pointer << 8) + pointer_lower)));
-        } else if offset + 1 + (len as usize) > buffer.len() {
-            return Err(BufferTooSmall {
-                remaining_len: buffer.len() - offset,
-                expected_len: len as usize,
-            });
-        } else if (len as usize) > MAX_LABEL_SIZE {
-            return Err(LabelTooLarge(len as usize));
-        } else {
-            // TODO: Fail if it is either 01xxxxxx or 10xxxxxx
-            label_length(len)
-        };
-
-        Self::valudate_label(&buffer[offset + 1..offset + 1 + len])?;
-
-        Ok((
-            1 + len,
-            Label(Self(
-                std::str::from_utf8(&buffer[offset + 1..offset + 1 + len])
-                    .expect("Ascii to be valid utf8"),
-            )),
-        ))
-    }
-
-    const fn valudate_label(label_bytes: &[u8]) -> Result<(), LabelParseError> {
-        use LabelParseError::*;
+        if label_bytes.len() > MAX_LABEL_SIZE {
+            return Err(LabelTooLong(label_bytes.len()));
+        }
 
         let mut i = 0;
         while i < label_bytes.len() {
@@ -85,62 +61,40 @@ impl<'data> Label<'data> {
                 b'A'..=b'Z' | b'a'..=b'z' => {}
                 b'0'..=b'9' if i != 0 => {}
                 b'-' if i != 0 && i + 1 != label_bytes.len() => {}
-                c => return Err(IllegalLabelChar(*c)),
+                c => {
+                    return Err(IllegalLabelChar {
+                        char: *c,
+                        position: i,
+                    })
+                }
             }
             i += 1;
         }
 
         Ok(())
     }
-
-    pub fn from_str(str: &'data str) -> Result<LabelParseResult<'data>, LabelParseError> {
-        use LabelParseError::*;
-        use LabelParseResult::*;
-
-        let bytes = str.as_bytes();
-        if bytes.is_empty() {
-            return Ok(End);
-        }
-
-        let mut i = 0;
-        while i <= MAX_LABEL_SIZE {
-            if i == MAX_LABEL_SIZE {
-                return Err(LabelTooLarge(0));
-            }
-            if i >= bytes.len() || bytes[i] == b'.' {
-                match Self::valudate_label(&bytes[0..i]) {
-                    Ok(()) => {}
-                    Err(e) => return Err(e),
-                };
-                return Ok(Label(Self(&str[0..i])));
-            }
-            i += 1;
-        }
-        Err(LabelTooLarge(0))
-    }
 }
 
-pub fn label_pointer(char: &u8) -> Option<usize> {
-    if (char & 0xc0) == 0xc0 {
-        Some((char & 0x3f) as usize)
-    } else {
-        None
-    }
-}
-
-fn label_length(char: u8) -> usize {
-    (char & 0x3f) as usize
-}
-
-impl<'data> AsRef<str> for Label<'data> {
+impl AsRef<str> for Label {
     fn as_ref(&self) -> &str {
-        &self.0
+        match self {
+            Self::Boxed(l) => l.as_ref(),
+            Self::Static(l) => l.as_ref(),
+        }
     }
 }
 
-impl<'data> Hash for Label<'data> {
+impl core::ops::Deref for Label {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl Hash for Label {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for c in self.0.as_bytes() {
+        for c in self.as_bytes() {
             state.write_u8(match c {
                 b'A'..=b'Z' | b'a'..=b'z' => c & 0b01011111,
                 c => *c,
@@ -149,16 +103,25 @@ impl<'data> Hash for Label<'data> {
     }
 }
 
-impl<'data> PartialEq for Label<'data> {
+impl PartialEq for Label {
     fn eq(&self, other: &Self) -> bool {
-        self.0.eq_ignore_ascii_case(other.0)
+        self.as_ref().eq_ignore_ascii_case(other.as_ref())
     }
 }
 
-impl<'data> Eq for Label<'data> {}
+impl Eq for Label {}
 
-impl<'data> Display for Label<'data> {
+impl Display for Label {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        self.as_ref().fmt(f)
+    }
+}
+
+impl Clone for Label {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Static(s) => Self::Static(s.clone()),
+            Self::Boxed(a) => Self::Boxed(Arc::clone(&a)),
+        }
     }
 }

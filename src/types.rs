@@ -1,46 +1,89 @@
+use std::sync::Arc;
+
 #[derive(Debug)]
 pub struct UnknownType(pub u16);
+/*
+71, 203, -- id
+1, 0, -- flags
+0, 2, -- questions
+0, 0, -- answers
+0, 0, -- authorative
+0, 0, -- additional
+-- question 1
+-- qname
+3, 97, 98, 99, (Len: 3) abc
+17, 108, 111, 110, 103, 97, 115, 115, 100, 111, 109, 97, 105, 110, 110, 97, 109, 101, (Len 17) longassdomainname
+3, 99, 111, 109, (Len: 3) com
+0, (Len: 0)
+0, 1, -- qtype
+0, 1, -- qclass
+-- question 2
+-- qname
+3, 100, 101, 102, (Len: 3) def
+192, 16, 
+0, 1, 0, 1]
+*/
 
 #[derive(Debug, Clone, Copy)]
 pub enum Type {
     A,
     NS,
+    #[deprecated]
     MD,
+    #[deprecated]
     MF,
     CNAME,
     SOA,
+    #[deprecated]
     MB,
+    #[deprecated]
     MG,
+    #[deprecated]
     MR,
+    #[deprecated]
     NULL,
+    #[deprecated]
     WKS,
     PTR,
     HINFO,
     MINFO,
     MX,
     TXT,
+    RP,
+    AAAA,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum QType {
     A,
     NS,
+    #[deprecated]
     MD,
+    #[deprecated]
     MF,
     CNAME,
     SOA,
+    #[deprecated]
     MB,
+    #[deprecated]
     MG,
+    #[deprecated]
     MR,
+    #[deprecated]
     NULL,
+    #[deprecated]
     WKS,
     PTR,
     HINFO,
     MINFO,
     MX,
     TXT,
+    RP,
+    AAAA,
     AXFR,
+    #[deprecated]
     MAILB,
+    #[deprecated]
     MAILA,
     All,
 }
@@ -64,6 +107,8 @@ impl Type {
             Self::MINFO => 14,
             Self::MX => 15,
             Self::TXT => 16,
+            Self::RP => 17,
+            Self::AAAA => 28,
         }
     }
 }
@@ -87,6 +132,8 @@ impl QType {
             Self::MINFO => 14,
             Self::MX => 15,
             Self::TXT => 16,
+            Self::RP => 16,
+            Self::AAAA => 28,
             Self::AXFR => 252,
             Self::MAILB => 253,
             Self::MAILA => 254,
@@ -116,6 +163,8 @@ impl TryFrom<u16> for Type {
             14 => Type::MINFO,
             15 => Type::MX,
             16 => Type::TXT,
+            17 => Type::RP,
+            28 => Type::AAAA,
             val => return Err(UnknownType(val)),
         })
     }
@@ -157,6 +206,8 @@ impl From<Type> for QType {
             Type::MINFO => Self::MINFO,
             Type::MX => Self::MX,
             Type::TXT => Self::TXT,
+            Type::RP => Self::RP,
+            Type::AAAA => Self::AAAA,
         }
     }
 }
@@ -243,13 +294,14 @@ impl From<Class> for QClass {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum CowData<'a> {
-    Owned(Box<[u8]>),
+    Owned(Arc<[u8]>),
     Borrowed(&'a [u8]),
 }
 
 impl<'a> CowData<'a> {
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         match self {
             Self::Owned(data) => data.len(),
             Self::Borrowed(data) => data.len(),
