@@ -12,7 +12,7 @@ pub use self::class::{Class, QClass};
 pub use self::domain_name::DomainName;
 pub use self::header::{
     HeaderView, HeaderViewError, HeaderViewValidated, Opcode, PacketType, ResponseCode,
-    UnknownOpcodeError, UnknownResponseCodeError,
+    UnknownResponseCodeError,
 };
 pub use self::label::{Label, LabelError};
 pub use self::packet::{Packet, PacketError};

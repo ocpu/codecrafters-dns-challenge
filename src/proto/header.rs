@@ -53,7 +53,7 @@
 //!
 //! let view = HeaderView::new(&header);
 //! assert_eq!(view.packet_type(), Some(PacketType::Response));
-//! assert_eq!(view.opcode(), Ok(Some(Opcode::Query)));
+//! assert_eq!(view.opcode(), Some(Opcode::Query));
 //! assert_eq!(view.question_entries(), Some(1));
 //! println!("{view:?}");
 //!
@@ -79,10 +79,6 @@ pub type HeaderViewValidated<'data> = GenericHeaderView<'data, Valid>;
 pub type HeaderView<'data> = GenericHeaderView<'data, Invalid>;
 
 #[derive(Debug, Error)]
-#[error("The header specified an unknown opcode: {0}")]
-pub struct UnknownOpcodeError(u8);
-
-#[derive(Debug, Error)]
 #[error("The header specified an unknown response code: {0}")]
 pub struct UnknownResponseCodeError(u8);
 
@@ -90,8 +86,6 @@ pub struct UnknownResponseCodeError(u8);
 pub enum HeaderViewError {
     #[error("The size of the header buffer was {0} expected 12")]
     IncorrectHeaderSize(usize),
-    #[error(transparent)]
-    UnknownOpcode(#[from] UnknownOpcodeError),
     #[error(transparent)]
     UnknownResponseCode(#[from] UnknownResponseCodeError),
 }
@@ -101,6 +95,7 @@ pub enum Opcode {
     Query,
     InverseQuery,
     Status,
+    Unknown(u8),
 }
 
 impl Opcode {
@@ -109,6 +104,7 @@ impl Opcode {
             Opcode::Query => 0,
             Opcode::InverseQuery => 1,
             Opcode::Status => 2,
+            Opcode::Unknown(code) => *code,
         }
     }
 }
@@ -204,16 +200,16 @@ impl<'data> GenericHeaderView<'data, Invalid> {
     /// and copied into the response.
     ///
     /// Field: Opcode
-    pub const fn opcode(&self) -> Result<Option<Opcode>, UnknownOpcodeError> {
+    pub const fn opcode(&self) -> Option<Opcode> {
         if self.0.len() < 3 {
-            return Ok(None);
+            return None;
         }
-        Ok(Some(match (self.0[2] >> 3) & 0xf {
+        Some(match (self.0[2] >> 3) & 0xf {
             0 => Opcode::Query,
             1 => Opcode::InverseQuery,
             2 => Opcode::Status,
-            code => return Err(UnknownOpcodeError(code)),
-        }))
+            code => Opcode::Unknown(code),
+        })
     }
 
     /// Authoritative Answer - this bit is valid in responses,
@@ -346,10 +342,6 @@ impl<'data> GenericHeaderView<'data, Valid> {
         if buffer.len() != Self::SIZE {
             return Err(HeaderViewError::IncorrectHeaderSize(buffer.len()));
         }
-        match (buffer[2] >> 3) & 0xf {
-            0..=2 => {}
-            code => return Err(HeaderViewError::UnknownOpcode(UnknownOpcodeError(code))),
-        }
         match buffer[3] & 0xf {
             0..=5 => {}
             code => {
@@ -393,7 +385,7 @@ impl<'data> GenericHeaderView<'data, Valid> {
             0 => Opcode::Query,
             1 => Opcode::InverseQuery,
             2 => Opcode::Status,
-            _ => panic!("Opcode should already be checked!"),
+            code => Opcode::Unknown(code),
         }
     }
 
@@ -502,9 +494,8 @@ impl<'data> Debug for GenericHeaderView<'data, Invalid> {
             return ds.finish_non_exhaustive();
         }
         let _ = match self.opcode() {
-            Ok(Some(val)) => ds.field("opcode", &val),
-            Ok(None) => return ds.finish_non_exhaustive(),
-            Err(err) => ds.field("opcode", &err),
+            Some(val) => ds.field("opcode", &val),
+            None => return ds.finish_non_exhaustive(),
         };
         if let Some(val) = self.authoritive_answer() {
             ds.field("authoritive_answer", &val);
