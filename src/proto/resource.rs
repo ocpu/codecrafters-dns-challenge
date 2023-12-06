@@ -3,11 +3,8 @@ use thiserror::Error;
 use std::fmt;
 
 use super::{
-    class::Class,
-    domain_name::DomainName,
-    label::LabelError,
-    types::Type,
-    FromPacketBytes, DebugList,
+    class::Class, domain_name::DomainName, label::LabelError, types::Type, DebugList,
+    FromPacketBytes,
 };
 
 #[derive(Clone, Copy)]

@@ -1,6 +1,6 @@
 //! The DNS packet header is a struct with an id a few flags and the number of questions, answers,
 //! name servers in the authority section, and the number of additional records. The structure is
-//! as the following, and multibyte items are in big endian order. 
+//! as the following, and multibyte items are in big endian order.
 //! ```text
 //!                                     1  1  1  1  1  1
 //!       0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5

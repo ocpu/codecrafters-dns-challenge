@@ -39,11 +39,6 @@ impl Label {
         }
     }
 
-    pub fn from_static(s: &'static str) -> Self {
-        Self::valudate_label(s.as_bytes()).unwrap();
-        Self::Static(s)
-    }
-
     pub const unsafe fn from_static_unchecked(s: &'static str) -> Self {
         Self::Static(s)
     }
@@ -120,7 +115,7 @@ impl Display for Label {
 impl Clone for Label {
     fn clone(&self) -> Self {
         match self {
-            Self::Static(s) => Self::Static(s.clone()),
+            Self::Static(s) => Self::Static(s),
             Self::Boxed(a) => Self::Boxed(Arc::clone(&a)),
         }
     }

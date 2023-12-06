@@ -1,7 +1,4 @@
-use std::{
-    fmt::Display,
-    hash::Hash,
-};
+use std::{fmt::Display, hash::Hash};
 
 use thiserror::Error;
 
@@ -143,7 +140,7 @@ impl<'data> Iterator for LabelIter<'data> {
                 offset,
                 buffer,
             } => Label::parse(buffer, offset + 1 + data.len()),
-            Label::Pointer { offset, buffer } if (self.pointer_mask & (1u16 << offset)) != 0 => {
+            Label::Pointer { offset, .. } if (self.pointer_mask & (1u16 << offset)) != 0 => {
                 Err(LabelError::IllegalLabelPointer(offset as u16))
             }
             Label::Pointer { offset, buffer } => Label::parse(buffer, offset),
@@ -161,7 +158,7 @@ impl<'data> Display for Label<'data> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Label::Data { data, .. } => write!(f, "{data}."),
-            Label::Pointer { .. } => Ok(())
+            Label::Pointer { .. } => Ok(()),
         }
     }
 }
@@ -176,7 +173,7 @@ impl<'data> Hash for Label<'data> {
                         c => *c,
                     });
                 }
-            },
+            }
             Label::Pointer { .. } => {}
         }
     }

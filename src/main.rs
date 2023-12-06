@@ -24,11 +24,9 @@ use crate::{
 };
 use std::{
     collections::HashMap,
-    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
-
-const MAX_MESSAGE_SIZE: usize = 512;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -110,7 +108,9 @@ async fn main() {
                             tracing::error!("Failed to send back to source");
                         }
                     }
-                }.instrument(tracing::info_span!("dns_request", source = %source)).await
+                }
+                .instrument(tracing::info_span!("dns_request", source = %source))
+                .await
             }
         });
     }
@@ -269,10 +269,10 @@ where
 
     Ok(builder)
 }
-
+/*
 #[cfg(debug_assertions)]
 fn print_buffer(label: &str, buffer: &ArrayBuffer) {
     eprintln!("--- Begin {label} ---");
     eprint!("{buffer:b}");
     eprintln!("--- End {label} ---");
-}
+}*/

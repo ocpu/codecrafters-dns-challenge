@@ -1,6 +1,6 @@
 //! The DNS packet header is a struct with an id a few flags and the number of questions, answers,
 //! name servers in the authority section, and the number of additional records. The structure is
-//! as the following, and multibyte items are in big endian order. 
+//! as the following, and multibyte items are in big endian order.
 //! ```text
 //!                                     1  1  1  1  1  1
 //!       0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
@@ -170,16 +170,6 @@ impl<'data, State> GenericHeaderView<'data, State> {
 impl<'data> GenericHeaderView<'data, Invalid> {
     pub const fn new(buffer: &'data [u8]) -> Self {
         Self(buffer, PhantomData)
-    }
-
-    pub const fn new_validated(
-        buffer: &'data [u8],
-    ) -> Result<Option<GenericHeaderView<'data, Valid>>, HeaderViewError> {
-        GenericHeaderView::<'data, Valid>::new(buffer)
-    }
-
-    pub const fn into_manually_validated(self) -> GenericHeaderView<'data, Valid> {
-        GenericHeaderView(self.0, PhantomData)
     }
 
     /// A 16 bit identifier assigned by the program that
@@ -589,7 +579,7 @@ impl<'data> super::FromPacketBytes<'data> for GenericHeaderView<'data, Valid> {
 
     fn parse(bytes: &'data [u8], offset: usize) -> Result<Option<Self>, Self::Error> {
         if bytes.len() - offset < Self::SIZE {
-            return Err(HeaderViewError::IncorrectHeaderSize(bytes.len() - offset))
+            return Err(HeaderViewError::IncorrectHeaderSize(bytes.len() - offset));
         }
         Self::new(&bytes[offset..offset + Self::SIZE])
     }

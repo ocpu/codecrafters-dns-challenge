@@ -1,6 +1,10 @@
-use std::{net::{Ipv4Addr, Ipv6Addr}, sync::Arc};
+use std::{net::Ipv4Addr, sync::Arc};
 
-use crate::{proto::{Class, Type}, domain_name::DomainName, types::CowData};
+use crate::{
+    domain_name::DomainName,
+    proto::{Class, Type},
+    types::CowData,
+};
 
 pub struct Resource(pub DomainName, pub ResourceData);
 
@@ -62,7 +66,7 @@ impl<'data> From<crate::proto::Resource<'data>> for ResourceData {
             typ: value.typ(),
             class: value.class(),
             ttl: value.ttl(),
-            data: Arc::from(value.data())
+            data: Arc::from(value.data()),
         }
     }
 }

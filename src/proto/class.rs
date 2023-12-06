@@ -5,6 +5,6 @@ pub [Class, QClass, Unknown]:
     CS => 2,
     CH => 3,
     HS => 4,
-    
+
     [Any => 255],
 }

@@ -1,6 +1,9 @@
 use bytes::buf::{Buf, BufMut, UninitSlice};
 
-use std::{mem, slice, ptr, fmt, num::Saturating, sync::atomic::{AtomicUsize, Ordering}};
+use std::{
+    fmt, mem, ptr, slice,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 pub struct ArrayBuffer {
     read_cursor: usize,
@@ -67,29 +70,31 @@ impl ArrayBuffer {
     }
 
     pub fn capacity(&self) -> usize {
-        ptr_opt(self.data).map(|ptr| unsafe { ptr.as_ref().unwrap() }.cap).unwrap_or_default()
+        ptr_opt(self.data)
+            .map(|ptr| unsafe { ptr.as_ref().unwrap() }.cap)
+            .unwrap_or_default()
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        ptr_opt(self.data).map(|data| {
-            let len = self.max_len.map(|v| v.min(self.len)).unwrap_or(self.len);
-            unsafe { &data.as_ref().unwrap().as_slice()[..len] }
-        }).unwrap_or(&[])
+        ptr_opt(self.data)
+            .map(|data| {
+                let len = self.max_len.map(|v| v.min(self.len)).unwrap_or(self.len);
+                unsafe { &data.as_ref().unwrap().as_slice()[..len] }
+            })
+            .unwrap_or(&[])
     }
 
     pub fn as_slice_mut(&mut self) -> &mut [u8] {
-        ptr_opt(self.data).map(|data| {
-            let len = self.max_len.map(|v| v.min(self.len)).unwrap_or(self.len);
-            unsafe { &mut data.as_ref().unwrap().as_slice_mut()[0..len] }
-        }).unwrap_or(&mut [])
+        ptr_opt(self.data)
+            .map(|data| {
+                let len = self.max_len.map(|v| v.min(self.len)).unwrap_or(self.len);
+                unsafe { &mut data.as_ref().unwrap().as_slice_mut()[0..len] }
+            })
+            .unwrap_or(&mut [])
     }
 
     pub fn set_len(&mut self, new_len: usize) {
         self.len = new_len;
-    }
-
-    pub fn reset_read(&mut self) {
-        self.read_cursor = 0;
     }
 
     pub fn clear(&mut self) {
@@ -100,10 +105,7 @@ impl ArrayBuffer {
     fn grow(&mut self, min_new_space: usize) {
         const GROWTH_FACTOR: f64 = 1.5;
         let cap = self.capacity();
-        let new_len = usize::max(
-            ((cap as f64) * GROWTH_FACTOR) as usize,
-            cap + min_new_space,
-        );
+        let new_len = usize::max(((cap as f64) * GROWTH_FACTOR) as usize, cap + min_new_space);
 
         let new_len = self.max_len.map(|l| l.min(new_len)).unwrap_or(new_len);
 
@@ -125,7 +127,11 @@ impl ArrayBuffer {
 
 impl Data {
     fn new(ptr: *mut u8, cap: usize) -> Self {
-        Self { ptr, cap, refs: AtomicUsize::new(1) }
+        Self {
+            ptr,
+            cap,
+            refs: AtomicUsize::new(1),
+        }
     }
 
     fn with_capacity(cap: usize) -> Self {
@@ -141,7 +147,8 @@ impl Data {
 
     fn copy_from(&self, other: &Data) {
         unsafe {
-            self.ptr.copy_from_nonoverlapping(other.ptr, self.cap.min(other.cap));
+            self.ptr
+                .copy_from_nonoverlapping(other.ptr, self.cap.min(other.cap));
         }
     }
 
@@ -163,10 +170,6 @@ impl Data {
 
     fn into_ptr(self) -> *mut Data {
         Box::leak(Box::new(self))
-    }
-
-    fn increment(&self) -> usize {
-        self.refs.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     fn decrement(&self) -> usize {
@@ -226,11 +229,14 @@ impl From<&[u8]> for ArrayBuffer {
 
 unsafe impl BufMut for ArrayBuffer {
     fn remaining_mut(&self) -> usize {
-        (Saturating(self.max_len.unwrap_or(usize::MAX)) - Saturating(self.len)).0
+        self.max_len.unwrap_or(usize::MAX).saturating_sub(self.len)
     }
 
     unsafe fn advance_mut(&mut self, cnt: usize) {
-        assert!(self.len + cnt < self.max_len.unwrap_or(usize::MAX), "Cursor beyond max len");
+        assert!(
+            self.len + cnt < self.max_len.unwrap_or(usize::MAX),
+            "Cursor beyond max len"
+        );
         self.len += cnt;
     }
 
@@ -238,7 +244,9 @@ unsafe impl BufMut for ArrayBuffer {
         if self.len >= self.capacity() {
             self.grow(usize::max(64, self.len - self.capacity()));
         }
-        ptr_opt_ref(self.data).map(|data| unsafe { data.as_uninit_slice(self.len) }).expect("Data is null")
+        ptr_opt_ref(self.data)
+            .map(|data| unsafe { data.as_uninit_slice(self.len) })
+            .expect("Data is null")
     }
 }
 

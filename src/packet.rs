@@ -6,7 +6,7 @@ use crate::{
     array_buffer::ArrayBuffer,
     domain_name::DomainName,
     header::Header,
-    proto::{PacketType, ResponseCode, Opcode, HeaderView},
+    proto::{HeaderView, Opcode, PacketType, ResponseCode},
     question::Question,
     resource::Resource,
 };
@@ -75,14 +75,11 @@ impl DNSPacketBuilder {
         self
     }
 
-    pub fn build_into<'a>(
-        self,
-        buffer: &'a mut ArrayBuffer,
-    ) {
+    pub fn build_into<'a>(self, buffer: &'a mut ArrayBuffer) {
         self.header.write_into(buffer);
 
         let mut written_names: Vec<(u64, usize)> = Vec::new();
-        let mut truncate = false;
+        //let mut truncate = false;
 
         for question in self.questions {
             let start = buffer.len();
@@ -90,14 +87,14 @@ impl DNSPacketBuilder {
                 Ok(()) => {}
                 Err(TooLong) => {
                     set_truncated(buffer, start);
-                    truncate = true;
+                    //truncate = true;
                     break;
                 }
             };
 
             if buffer.remaining_mut() < 4 {
                 set_truncated(buffer, start);
-                truncate = true;
+                //truncate = true;
                 break;
             }
 
@@ -105,7 +102,13 @@ impl DNSPacketBuilder {
             buffer.put_u16(question.q_class().as_u16());
         }
 
-        truncate = truncate || write_resource_list(buffer, self.answers.into_iter(), self.compress, &mut written_names);
+        /*truncate = truncate || */
+        write_resource_list(
+            buffer,
+            self.answers.into_iter(),
+            self.compress,
+            &mut written_names,
+        );
     }
 }
 
@@ -114,7 +117,12 @@ fn set_truncated(buffer: &mut ArrayBuffer, new_len: usize) {
     buffer.as_slice_mut()[2] |= 2;
 }
 
-fn write_resource_list(buffer: &mut ArrayBuffer, iter: impl Iterator<Item = Resource>, compress: bool, written_names: &mut Vec<(u64, usize)>) -> bool {
+fn write_resource_list(
+    buffer: &mut ArrayBuffer,
+    iter: impl Iterator<Item = Resource>,
+    compress: bool,
+    written_names: &mut Vec<(u64, usize)>,
+) -> bool {
     for Resource(name, data) in iter {
         let start = buffer.len();
 
@@ -155,7 +163,11 @@ fn write_name(
     domain_name.hash(&mut hasher);
     let hash = hasher.finish();
 
-    if compress && written_names.iter().any(|(name_hash, _)| *name_hash == hash) {
+    if compress
+        && written_names
+            .iter()
+            .any(|(name_hash, _)| *name_hash == hash)
+    {
         if buffer.remaining_mut() < 2 {
             return Err(TooLong);
         }
@@ -181,12 +193,16 @@ fn write_name(
             if compress {
                 let next_hash = {
                     let mut hasher = DefaultHasher::default();
-                    domain_name.labels().skip(index).for_each(|label| label.hash(&mut hasher));
+                    domain_name
+                        .labels()
+                        .skip(index)
+                        .for_each(|label| label.hash(&mut hasher));
                     hasher.finish()
                 };
 
-                if let Some((_, offset)) =
-                    written_names.iter().find(|(name_hash, _)| *name_hash == next_hash)
+                if let Some((_, offset)) = written_names
+                    .iter()
+                    .find(|(name_hash, _)| *name_hash == next_hash)
                 {
                     pointer = domain_name.len() - index;
                     if buffer.remaining_mut() < 2 {
@@ -212,10 +228,7 @@ fn write_name(
 
             // The 1 here refers to the last "null" in the name sequence.
             // While the 1 in the map refers to the length byte.
-            let buffer_len: usize = 1 + labels
-                .iter()
-                .map(|label| label.len() + 1)
-                .sum::<usize>();
+            let buffer_len: usize = 1 + labels.iter().map(|label| label.len() + 1).sum::<usize>();
             let hash = {
                 let mut hasher = DefaultHasher::default();
                 labels.iter().for_each(|label| label.hash(&mut hasher));

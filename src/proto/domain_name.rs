@@ -6,15 +6,13 @@ use super::label::{Label, LabelError};
 pub struct DomainName<'data>(Option<Label<'data>>, usize);
 
 impl<'data> DomainName<'data> {
-    pub fn new_unchecked(start: Label<'data>, labels: usize) -> Self {
-        Self(Some(start), labels)
-    }
-
     pub fn size_in_packet(&self) -> usize {
         let mut len = 0;
         if let Some(start) = self.0 {
             for label in start {
-                len += match label.expect("Domain name labels to be validated before calling size_in_packet") {
+                len += match label
+                    .expect("Domain name labels to be validated before calling size_in_packet")
+                {
                     Label::Data { data, .. } => 1 + data.len(),
                     Label::Pointer { .. } => return len + 2,
                 }
@@ -30,7 +28,11 @@ impl<'data> DomainName<'data> {
 
     pub fn iter(&self) -> impl Iterator<Item = &'data str> {
         // Unwrap is safe as we check all labels during parse
-        self.0.into_iter().flat_map(|l| l).map(|l| l.unwrap()).filter_map(|l| l.data())
+        self.0
+            .into_iter()
+            .flat_map(|l| l)
+            .map(|l| l.unwrap())
+            .filter_map(|l| l.data())
     }
 }
 
@@ -70,7 +72,6 @@ impl<'data> fmt::Display for DomainName<'data> {
     }
 }
 
-
 impl<'data> fmt::Debug for DomainName<'data> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(start) = self.0 {
@@ -93,7 +94,9 @@ impl<'data> Hash for DomainName<'data> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         if let Some(start) = self.0 {
             for label in start {
-                label.expect("Domain name labels to be validated before running hash.").hash(state);
+                label
+                    .expect("Domain name labels to be validated before running hash.")
+                    .hash(state);
             }
         }
     }

@@ -2,7 +2,10 @@ use thiserror::Error;
 
 use std::fmt;
 
-use super::{FromPacketBytes, HeaderViewError, HeaderViewValidated, Question, Resource, QuestionError, ResourceError, DebugList};
+use super::{
+    DebugList, FromPacketBytes, HeaderViewError, HeaderViewValidated, Question, QuestionError,
+    Resource, ResourceError,
+};
 
 pub struct Packet<'data> {
     header: HeaderViewValidated<'data>,
@@ -61,11 +64,17 @@ impl<'data> Packet<'data> {
     }
 
     pub fn authority(&self) -> impl Iterator<Item = Resource<'data>> {
-        ResourceIter(self.header.authority_entries() as usize, self.first_autoritive)
+        ResourceIter(
+            self.header.authority_entries() as usize,
+            self.first_autoritive,
+        )
     }
 
     pub fn additional(&self) -> impl Iterator<Item = Resource<'data>> {
-        ResourceIter(self.header.additional_entries() as usize, self.first_additional)
+        ResourceIter(
+            self.header.additional_entries() as usize,
+            self.first_additional,
+        )
     }
 }
 
@@ -110,7 +119,9 @@ impl<'data> FromPacketBytes<'data> for Packet<'data> {
                 continue;
             }
             if answers > 0 {
-                let Some(answer) = Resource::parse(bytes, packet_offset).map_err(PacketError::Answer)? else {
+                let Some(answer) =
+                    Resource::parse(bytes, packet_offset).map_err(PacketError::Answer)?
+                else {
                     if first_answer.is_none() {
                         return Err(PacketError::NoAnswers);
                     } else {
@@ -128,7 +139,9 @@ impl<'data> FromPacketBytes<'data> for Packet<'data> {
                 continue;
             }
             if authoritive_items > 0 {
-                let Some(authoritive_item) = Resource::parse(bytes, packet_offset).map_err(PacketError::AuthoritiveItem)? else {
+                let Some(authoritive_item) =
+                    Resource::parse(bytes, packet_offset).map_err(PacketError::AuthoritiveItem)?
+                else {
                     if first_autoritive.is_none() {
                         return Err(PacketError::NoAuthorityItems);
                     } else {
@@ -146,7 +159,9 @@ impl<'data> FromPacketBytes<'data> for Packet<'data> {
                 continue;
             }
             if additional_items > 0 {
-                let Some(additional_item) = Resource::parse(bytes, packet_offset).map_err(PacketError::AdditionalItem)? else {
+                let Some(additional_item) =
+                    Resource::parse(bytes, packet_offset).map_err(PacketError::AdditionalItem)?
+                else {
                     if first_additional.is_none() {
                         return Err(PacketError::NoAdditionalItems);
                     } else {

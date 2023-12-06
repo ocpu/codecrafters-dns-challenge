@@ -1,7 +1,9 @@
 use bytes::BufMut;
 
-use crate::{proto::{PacketType, Opcode, ResponseCode}, array_buffer::ArrayBuffer};
-
+use crate::{
+    array_buffer::ArrayBuffer,
+    proto::{Opcode, PacketType, ResponseCode},
+};
 
 #[derive(Debug)]
 pub struct Header {
@@ -113,11 +115,13 @@ impl Header {
 
     pub fn write_into(&self, buffer: &mut ArrayBuffer) {
         buffer.put_u16(self.id);
-        buffer.put_u8((self.recursion_desired as u8)
-            + ((self.truncated as u8) << 1)
-            + ((self.authoritive_answer as u8) << 2)
-            + (self.opcode.as_u8() << 3)
-            + (self.packet_type.as_u8() << 7));
+        buffer.put_u8(
+            (self.recursion_desired as u8)
+                + ((self.truncated as u8) << 1)
+                + ((self.authoritive_answer as u8) << 2)
+                + (self.opcode.as_u8() << 3)
+                + (self.packet_type.as_u8() << 7),
+        );
         buffer.put_u8(self.response_code.as_u8() + ((self.recursion_available as u8) << 7));
         buffer.put_u16(self.question_entries);
         buffer.put_u16(self.answer_entries);

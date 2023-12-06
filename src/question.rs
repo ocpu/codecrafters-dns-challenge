@@ -1,5 +1,6 @@
 use crate::{
-    domain_name::DomainName, proto::{QType, QClass},
+    domain_name::DomainName,
+    proto::{QClass, QType},
 };
 
 #[derive(Debug, Clone)]

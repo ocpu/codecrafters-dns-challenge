@@ -2,7 +2,10 @@ use std::{fmt::Display, hash::Hash, sync::Arc};
 
 use thiserror::Error;
 
-use crate::{label::{Label, LabelParseError}, proto};
+use crate::{
+    label::{Label, LabelParseError},
+    proto,
+};
 
 const MAX_NAME_SIZE: usize = 255;
 
@@ -27,10 +30,6 @@ pub enum DomainNameParseError {
 }
 
 impl DomainName {
-    pub fn new(labels: Arc<[Label]>) -> Self {
-        Self::Boxed(labels)
-    }
-
     pub fn from_static(str: &'static str) -> DomainName {
         if str.len() > MAX_NAME_SIZE {
             panic!("{}", DomainNameParseError::NameTooLong(str.len()));
@@ -75,7 +74,11 @@ impl DomainName {
     }
 
     pub fn equals(&self, other: &proto::DomainName<'_>) -> bool {
-        self.len() == other.len() && self.labels().zip(other.iter()).all(|(a, b)| a.eq_ignore_ascii_case(&b))
+        self.len() == other.len()
+            && self
+                .labels()
+                .zip(other.iter())
+                .all(|(a, b)| a.eq_ignore_ascii_case(&b))
     }
 }
 
@@ -152,14 +155,20 @@ impl<'a> Iterator for DomainNameIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Boxed { ref mut index, slice } => {
+            Self::Boxed {
+                ref mut index,
+                slice,
+            } => {
                 let Some(res) = slice.get(*index) else {
                     return None;
                 };
                 *index += 1;
                 Some(res.clone())
             }
-            Self::Static { ref mut cursor, ref str } => {
+            Self::Static {
+                ref mut cursor,
+                ref str,
+            } => {
                 if *cursor >= str.len() {
                     return None;
                 }
@@ -177,7 +186,7 @@ impl<'a> Iterator for DomainNameIter<'a> {
                 }
                 if b.len() > 0 {
                     // SAFETY: Already checked in DomainName::from_static.
-                    Some(unsafe {Label::from_static_unchecked(&str[start..str.len()]) })
+                    Some(unsafe { Label::from_static_unchecked(&str[start..str.len()]) })
                 } else {
                     None
                 }
