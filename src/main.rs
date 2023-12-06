@@ -1,20 +1,20 @@
-mod array_buffer;
-mod domain_name;
-mod header;
-mod label;
-mod packet;
-mod proto;
-mod question;
-mod resource;
-mod types;
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
+use tokio::{
+    sync::mpsc,
+};
 
-use array_buffer::ArrayBuffer;
 use clap::Parser;
-use packet::DNSPacketBuilder;
-use proto::{FromPacketBytes, Opcode};
 use thiserror::Error;
+use tokio::net::UdpSocket;
 use tracing::{Instrument, Level};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+use array_buffer::ArrayBuffer;
+use packet::DNSPacketBuilder;
+use proto::{FromPacketBytes, Opcode};
 
 use crate::{
     domain_name::DomainName,
@@ -28,11 +28,28 @@ use std::{
     sync::Arc,
 };
 
+mod array_buffer;
+mod domain_name;
+mod header;
+mod label;
+mod packet;
+mod proto;
+mod question;
+mod resource;
+mod types;
+
+#[cfg(feature = "code_crafters")]
+const DEFAULT_PORT: u16 = 2053;
+#[cfg(not(feature = "code_crafters"))]
+const DEFAULT_PORT: u16 = 53;
+
+const DEFAULT_UPSTREAM: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53);
+
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// The resolver to use
-    #[arg(short, long, default_value_t = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53))]
+    #[arg(short, long, default_value_t = DEFAULT_UPSTREAM)]
     resolver: SocketAddr,
 
     /// More output
@@ -44,13 +61,15 @@ struct Args {
     vvv: bool,
 
     /// The port to listen on
-    #[arg(short, long, default_value_t = 2053/*53*/)]
+    #[arg(short, long, default_value_t = DEFAULT_PORT)]
     port: u16,
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args = Args::parse();
+
+    // Setup logging
     let max_level = if args.vvv {
         Level::DEBUG
     } else if args.verbose {
@@ -59,14 +78,8 @@ async fn main() {
         Level::WARN
     };
 
-    tracing_subscriber::registry()
-        //        .with(console_subscriber::spawn())
-        .with(tracing_subscriber::filter::LevelFilter::from_level(
-            max_level,
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-    let mut map = HashMap::new();
+    configure_tracing(max_level);
+
     map.insert(
         DomainName::from_static("codecrafters.io"),
         vec![
@@ -75,66 +88,159 @@ async fn main() {
                 addr: [8, 8, 8, 8].into(),
             },
             ResourceData::A {
-                ttl: 540,
-                addr: Ipv4Addr::new(8, 8, 4, 4),
+                ttl: 500,
+                addr: [8, 8, 4, 4].into(),
             },
         ],
     );
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(1000);
-    let udp_socket = Arc::new(
-        tokio::net::UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], args.port)))
-            .await
-            .expect("Failed to bind to address"),
-    );
-    let forwarding_socket = tokio::net::UdpSocket::bind("0.0.0.0:0")
-        .await
-        .expect("Failed to bind to address");
-    forwarding_socket
-        .connect(args.resolver)
-        .await
-        .expect("Failed to connect to resolver");
-
-    {
-        let udp_socket = udp_socket.clone();
-        tokio::spawn(async move {
-            let mut response = ArrayBuffer::new().with_max_len(512);
-            while let Some((buf, source)) = rx.recv().await {
-                response.clear();
-                async {
-                    handle_dns_packet(buf, &mut response, &forwarding_socket, &map).await;
-                    if response.len() > 0 {
-                        if let Err(_) = udp_socket.send_to(response.as_slice(), source).await {
-                            tracing::error!("Failed to send back to source");
-                        }
-                    }
-                }
-                .instrument(tracing::info_span!("dns_request", source = %source))
-                .await
-            }
-        });
-    }
-
-    let mut buf = [0; 1024];
-
+    // UDP Listener
+    let (mut udp, rx) = match UDPStateSender::new(args.port, args.resolver).await {
+        Ok(res) => res,
+        Err(_) => {
+            tracing::error!(
+                transport = "UDP",
+                port = args.port,
+                "Failed to bind listener"
+            );
+            return;
+        }
+    };
     tracing::info!(transport = "UDP", port = args.port, "Listening");
+    spawn_udp_handler(cache.clone(), rx);
 
+    let mut udp_buffer = [0; 1024];
     loop {
-        let Ok((size, source)) = udp_socket.recv_from(&mut buf).await else {
-            eprintln!("ERROR: receiving data from socket");
-            break;
-        };
-
-        if tx.send(((&buf[..size]).into(), source)).await.is_err() {
-            break;
+        tokio::select! {
+            (size, source) = udp.recv(&mut udp_buffer) => {
+                udp.enqueue(&udp_buffer[..size], source, |rx| spawn_udp_handler(cache.clone(), rx)).await;
+            }
         }
     }
+}
+
+fn spawn_udp_handler(cache: EVCache, mut rx: mpsc::Receiver<UDPState>) {
+    tokio::spawn(async move {
+        let mut response = ArrayBuffer::new().with_max_len(512);
+        while let Some(state) = rx.recv().await {
+            response.clear();
+            async {
+                handle_dns_packet(state.buffer, &mut response, &state.forwarding, &cache).await;
+                if response.len() > 0 {
+                    if let Err(_) = state
+                        .socket
+                        .send_to(response.as_slice(), state.source)
+                        .await
+                    {
+                        tracing::error!("Failed to send back to source");
+                    }
+                }
+            }
+            .instrument(tracing::info_span!("dns_request", source = %state.source))
+            .await
+        }
+    });
+}
+
+
+
+
+        }
+    }
+}
+
+struct UDPState {
+    socket: Arc<UdpSocket>,
+    forwarding: Arc<SocketAddr>,
+    buffer: ArrayBuffer,
+    source: SocketAddr,
+}
+
+struct UDPStateSender {
+    socket: Arc<UdpSocket>,
+    forwarding: Arc<SocketAddr>,
+    sender: mpsc::Sender<UDPState>,
+    port: u16,
+}
+
+impl UDPStateSender {
+    pub async fn new(
+        port: u16,
+        forwarding_addr: SocketAddr,
+    ) -> Result<(Self, mpsc::Receiver<UDPState>), std::io::Error> {
+        let (tx, rx) = mpsc::channel(1000);
+        let udp_socket = Arc::new(UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], port))).await?);
+
+        Ok((
+            Self {
+                socket: udp_socket,
+                forwarding: Arc::new(forwarding_addr),
+                sender: tx,
+                port,
+            },
+            rx,
+        ))
+    }
+
+    pub async fn recv(&mut self, buffer: &mut [u8]) -> (usize, SocketAddr) {
+        let mut retried = false;
+        loop {
+            match self.socket.recv_from(buffer).await {
+                Ok(res) => return res,
+                Err(_) if !retried => {
+                    retried = true;
+                    self.socket = Arc::new(
+                        UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], self.port)))
+                            .await
+                            .expect("Failed to bind to address"),
+                    );
+                }
+                Err(e) => panic!("{e:?}"),
+            }
+        }
+    }
+
+    pub async fn enqueue(
+        &mut self,
+        buf: impl Into<ArrayBuffer>,
+        source: SocketAddr,
+        respawn_udp_handler: impl FnOnce(mpsc::Receiver<UDPState>) -> (),
+    ) {
+        let res = self
+            .sender
+            .send(UDPState {
+                socket: Arc::clone(&self.socket),
+                forwarding: Arc::clone(&self.forwarding),
+                buffer: buf.into(),
+                source,
+            })
+            .await;
+        if let Err(mpsc::error::SendError(state)) = res {
+            let (tx, rx) = mpsc::channel(1000);
+            self.sender = tx;
+            respawn_udp_handler(rx);
+            self.sender
+                .send(state)
+                .await
+                .expect("UDP message handler is unable to start")
+        }
+    }
+}
+
+fn configure_tracing(max_level: Level) {
+    use tracing_subscriber::filter::LevelFilter;
+    tracing_subscriber::registry()
+        //        #[cfg(feature = "tokio_debug")]
+        //        .with(console_subscriber::spawn());
+        .with(LevelFilter::from_level(max_level))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 }
 
 async fn handle_dns_packet(
     buf: ArrayBuffer,
     response: &mut ArrayBuffer,
-    forwarding_socket: &tokio::net::UdpSocket,
+    forwarding_addr: &SocketAddr,
     cache: &HashMap<DomainName, Vec<ResourceData>>,
 ) {
     if cfg!(debug_assertions) {
@@ -162,10 +268,10 @@ async fn handle_dns_packet(
             let mut builder = DNSPacketBuilder::respond(&packet, ResponseCode::None);
             let mut unknown_questions = Vec::new();
             for q in packet.questions() {
-                tracing::debug!(section = "question", domain_name = %q.name(), r#type = ?q.q_type(), class = ?q.q_class());
+                tracing::info!(section = "question", domain_name = %q.name(), r#type = ?q.q_type(), class = ?q.q_class());
                 let name = (&q.name()).into();
                 match cache.get(&name) {
-                    Some(records) => {
+                    Some(records) if !records.is_empty() => {
                         builder = records.iter().fold(
                             builder.add_question(Question::new(
                                 q.q_type().clone(),
@@ -175,12 +281,19 @@ async fn handle_dns_packet(
                             |b, record| b.add_answer(Resource(name.clone(), record.clone())),
                         )
                     }
+                    Some(_) => {
+                        builder = builder.add_question(Question::new(
+                            q.q_type().clone(),
+                            q.q_class().clone(),
+                            name.clone(),
+                        ))
+                    }
                     None => unknown_questions.push(q),
                 }
             }
             if !unknown_questions.is_empty() {
                 builder =
-                    match forward_request(&forwarding_socket, &packet, &unknown_questions, builder)
+                    match forward_request(&forwarding_addr, &packet, &unknown_questions, builder)
                         .await
                     {
                         Ok(b) => b,
@@ -220,7 +333,7 @@ enum ForwardError {
 }
 
 async fn forward_request<'a, 'b>(
-    socket: &tokio::net::UdpSocket,
+    resolver: &SocketAddr,
     packet: &proto::Packet<'a>,
     questions: &[proto::Question<'a>],
     mut builder: DNSPacketBuilder,
@@ -230,9 +343,12 @@ where
 {
     let mut request = ArrayBuffer::new().with_max_len((u16::MAX - 2) as usize);
     let mut response = [0; 1024];
+    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+    socket.connect(resolver).await?;
 
     for q in questions {
         let name: DomainName = (&q.name()).into();
+        request.clear();
         DNSPacketBuilder::query(packet.header().id())
             .add_question(Question::new(
                 q.q_type().clone(),
@@ -240,6 +356,8 @@ where
                 name.clone(),
             ))
             .build_into(&mut request);
+
+        tracing::info!(%name, "Forwarding question");
 
         //print_buffer("Forward Request", &request);
 
@@ -249,10 +367,13 @@ where
         //print_buffer("Forward Response", &ArrayBuffer::from(&response[..resp_size]));
 
         let Some(res_packet) = proto::Packet::parse(&response[..resp_size], 0)? else {
+            tracing::warn!("Returned no packet repr from response");
             continue;
         };
 
         assert_eq!(packet.header().id(), res_packet.header().id());
+        //println!("name={name}");
+        //println!("{res_packet:#?}");
 
         builder = res_packet
             .answers()
@@ -270,7 +391,6 @@ where
     Ok(builder)
 }
 /*
-#[cfg(debug_assertions)]
 fn print_buffer(label: &str, buffer: &ArrayBuffer) {
     eprintln!("--- Begin {label} ---");
     eprint!("{buffer:b}");
