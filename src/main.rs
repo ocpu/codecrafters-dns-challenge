@@ -44,7 +44,7 @@ struct Args {
     vvv: bool,
 
     /// The port to listen on
-    #[arg(short, long, default_value_t = 53)]
+    #[arg(short, long, default_value_t = 2053/*53*/)]
     port: u16,
 }
 
