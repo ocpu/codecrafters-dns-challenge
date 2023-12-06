@@ -195,7 +195,7 @@ fn write_name(
                     let mut hasher = DefaultHasher::default();
                     domain_name
                         .labels()
-                        .skip(index)
+                        .skip(index + 1)
                         .for_each(|label| label.hash(&mut hasher));
                     hasher.finish()
                 };
