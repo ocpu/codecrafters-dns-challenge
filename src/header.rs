@@ -1,70 +1,7 @@
-#[derive(Debug, Clone, Copy)]
-pub enum Opcode {
-    Query,
-    InverseQuery,
-    Status,
-}
+use bytes::BufMut;
 
-impl Opcode {
-    const fn as_u8(&self) -> u8 {
-        match self {
-            Opcode::Query => 0,
-            Opcode::InverseQuery => 1,
-            Opcode::Status => 2,
-        }
-    }
-}
+use crate::{proto::{PacketType, Opcode, ResponseCode}, array_buffer::ArrayBuffer};
 
-#[derive(Debug, Clone, Copy)]
-pub enum PacketType {
-    Query,
-    Response,
-}
-
-impl PacketType {
-    const fn as_u8(&self) -> u8 {
-        match self {
-            Self::Query => 0,
-            Self::Response => 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ResponseCode {
-    /// No error condition
-    None,
-    /// The name server was unable to interpret the query.
-    FormatError,
-    /// The name server was unable to process this query due to
-    /// a problem with the name server.
-    ServerFailure,
-    /// Meaningful only for responses from an authoritative name
-    /// server, this code signifies that the domain name referenced
-    /// in the query does not exist.
-    NameError,
-    /// The name server does not support the requested kind of query.
-    NotImplemented,
-    /// The name server refuses to perform the specified operation
-    /// for policy reasons.  For example, a name server may not wish
-    /// to provide the information to the particular requester, or a
-    /// name server may not wish to perform a particular operation
-    /// (e.g., zone transfer) for particular data.
-    Refused,
-}
-
-impl ResponseCode {
-    const fn as_u8(&self) -> u8 {
-        match self {
-            ResponseCode::None => 0,
-            ResponseCode::FormatError => 1,
-            ResponseCode::ServerFailure => 2,
-            ResponseCode::NameError => 3,
-            ResponseCode::NotImplemented => 4,
-            ResponseCode::Refused => 5,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct Header {
@@ -174,18 +111,18 @@ impl Header {
         }
     }
 
-    pub fn write_into(&self, buffer: &mut [u8]) {
-        let _ = &buffer[0..2].copy_from_slice(&self.id.to_be_bytes());
-        buffer[2] = (self.recursion_desired as u8)
+    pub fn write_into(&self, buffer: &mut ArrayBuffer) {
+        buffer.put_u16(self.id);
+        buffer.put_u8((self.recursion_desired as u8)
             + ((self.truncated as u8) << 1)
             + ((self.authoritive_answer as u8) << 2)
             + (self.opcode.as_u8() << 3)
-            + (self.packet_type.as_u8() << 7);
-        buffer[3] = self.response_code.as_u8() + ((self.recursion_available as u8) << 7);
-        let _ = &buffer[4..6].copy_from_slice(&self.question_entries.to_be_bytes());
-        let _ = &buffer[6..8].copy_from_slice(&self.answer_entries.to_be_bytes());
-        let _ = &buffer[8..10].copy_from_slice(&self.authority_entries.to_be_bytes());
-        let _ = &buffer[10..12].copy_from_slice(&self.additional_entries.to_be_bytes());
+            + (self.packet_type.as_u8() << 7));
+        buffer.put_u8(self.response_code.as_u8() + ((self.recursion_available as u8) << 7));
+        buffer.put_u16(self.question_entries);
+        buffer.put_u16(self.answer_entries);
+        buffer.put_u16(self.authority_entries);
+        buffer.put_u16(self.additional_entries);
     }
 }
 
@@ -248,10 +185,8 @@ mod test {
     fn test_serde() {
         let input_bytes = [4u8, 210, 16, 0, 0, 1, 0, 0, 0, 0, 0, 0];
         let input_header = Header::try_from(&input_bytes[..]).unwrap();
-        println!("{input_header:?}");
-        let mut output_bytes = [0u8; Header::SIZE];
-        input_header.write_into(&mut output_bytes[..]);
-        println!("{output_bytes:?}");
+        let mut output_bytes = ArrayBuffer::with_capacity(Header::SIZE);
+        input_header.write_into(&mut output_bytes);
         assert_eq!(&input_bytes[..Header::SIZE], &output_bytes[..Header::SIZE]);
     }
 }
