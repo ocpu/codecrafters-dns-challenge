@@ -10,7 +10,6 @@ use clap::Parser;
 use thiserror::Error;
 use tokio::net::UdpSocket;
 use tracing::{Instrument, Level};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use array_buffer::ArrayBuffer;
 use packet::DNSPacketBuilder;
@@ -240,10 +239,15 @@ impl UDPStateSender {
 }
 
 fn configure_tracing(max_level: Level) {
-    use tracing_subscriber::filter::LevelFilter;
-    tracing_subscriber::registry()
-        //        #[cfg(feature = "tokio_debug")]
-        //        .with(console_subscriber::spawn());
+    use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt};
+
+    #[cfg(feature = "tokio_debug")]
+    let subscriber = tracing_subscriber::registry().with(console_subscriber::spawn());
+
+    #[cfg(not(feature = "tokio_debug"))]
+    let subscriber = tracing_subscriber::registry();
+
+    subscriber
         .with(LevelFilter::from_level(max_level))
         .with(tracing_subscriber::fmt::layer())
         .init();
