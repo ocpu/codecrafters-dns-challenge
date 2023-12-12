@@ -109,14 +109,26 @@ async fn main() {
     tracing::info!(transport = "UDP", port = args.port, "Listening");
     spawn_udp_handler(cache.clone(), rx);
 
+    // Handle exit signal
+    let (sigint_sender, mut sigint_reciever) = tokio::sync::broadcast::channel(1);
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen on Ctrl+c");
+        sigint_sender.send(())
+    });
+
     let mut udp_buffer = [0; 1024];
     loop {
         tokio::select! {
             (size, source) = udp.recv(&mut udp_buffer) => {
                 udp.enqueue(&udp_buffer[..size], source, |rx| spawn_udp_handler(cache.clone(), rx)).await;
             }
+            _ = sigint_reciever.recv() => break,
         }
     }
+
+    tracing::info!("Closing server");
 }
 
 fn spawn_udp_handler(cache: EVCache, mut rx: mpsc::Receiver<UDPState>) {
