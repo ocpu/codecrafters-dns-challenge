@@ -6,9 +6,9 @@ use crate::{
     types::CowData,
 };
 
-pub struct Resource(pub DomainName, pub ResourceData);
+pub struct Resource(pub DomainName, pub Arc<ResourceData>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResourceData {
     A {
         ttl: u32,

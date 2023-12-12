@@ -15,19 +15,11 @@ use array_buffer::ArrayBuffer;
 use packet::DNSPacketBuilder;
 use proto::{FromPacketBytes, Opcode};
 
-use crate::{
-    domain_name::DomainName,
-    proto::ResponseCode,
-    question::Question,
-    resource::{Resource, ResourceData},
-};
-use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
-};
+use crate::cache::EVCache;
+use crate::{domain_name::DomainName, proto::ResponseCode, question::Question, resource::Resource};
 
 mod array_buffer;
+mod cache;
 mod domain_name;
 mod header;
 mod label;
@@ -79,19 +71,13 @@ async fn main() {
 
     configure_tracing(max_level);
 
-    map.insert(
-        DomainName::from_static("codecrafters.io"),
-        vec![
-            ResourceData::A {
-                ttl: 500,
-                addr: [8, 8, 8, 8].into(),
-            },
-            ResourceData::A {
-                ttl: 500,
-                addr: [8, 8, 4, 4].into(),
-            },
-        ],
-    );
+    // Setup cache
+    let (cache, cache_operator) = cache::new();
+    tokio::spawn(cache_operator.listen());
+
+    // Code Crafters cache entries
+    #[cfg(feature = "code_crafters")]
+    setup_for_code_crafters(&cache).await;
 
     // UDP Listener
     let (mut udp, rx) = match UDPStateSender::new(args.port, args.resolver).await {
@@ -130,6 +116,7 @@ async fn main() {
     tracing::info!("Closing server");
 }
 
+// NOTE: An owned EVCache is needed to have its own read handle on the cache data.
 fn spawn_udp_handler(cache: EVCache, mut rx: mpsc::Receiver<UDPState>) {
     tokio::spawn(async move {
         let mut response = ArrayBuffer::new().with_max_len(512);
@@ -158,6 +145,35 @@ fn spawn_udp_handler(cache: EVCache, mut rx: mpsc::Receiver<UDPState>) {
 
         }
     }
+}
+
+#[cfg(feature = "code_crafters")]
+async fn setup_for_code_crafters(cache: &EVCache) {
+    use create::resource::ResourceData;
+
+    cache
+        .bulk()
+        .insert(
+            &DomainName::from_static("codecrafters.io"),
+            ResourceData::A {
+                ttl: 500,
+                addr: [8, 8, 8, 8].into(),
+            },
+        )
+        .await
+        .unwrap()
+        .insert(
+            &DomainName::from_static("codecrafters.io"),
+            ResourceData::A {
+                ttl: 500,
+                addr: [8, 8, 4, 4].into(),
+            },
+        )
+        .await
+        .unwrap()
+        .publish()
+        .await
+        .unwrap();
 }
 
 struct UDPState {
@@ -257,7 +273,7 @@ async fn handle_dns_packet(
     buf: ArrayBuffer,
     response: &mut ArrayBuffer,
     forwarding_addr: &SocketAddr,
-    cache: &HashMap<DomainName, Vec<ResourceData>>,
+    cache: &EVCache,
 ) {
     if cfg!(debug_assertions) {
         //print_buffer("Input", &buf);
@@ -286,7 +302,7 @@ async fn handle_dns_packet(
             for q in packet.questions() {
                 tracing::info!(section = "question", domain_name = %q.name(), r#type = ?q.q_type(), class = ?q.q_class());
                 let name = (&q.name()).into();
-                match cache.get(&name) {
+                match cache.get((&name, q.q_type())) {
                     Some(records) if !records.is_empty() => {
                         builder = records.iter().fold(
                             builder.add_question(Question::new(
@@ -400,7 +416,7 @@ where
                     q.q_class().clone(),
                     name.clone(),
                 )),
-                |b, a| b.add_answer(Resource(name.clone(), a.into())),
+                |b, a| b.add_answer(Resource(name.clone(), Arc::new(a.into()))),
             );
     }
 
