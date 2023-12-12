@@ -3,12 +3,12 @@ use std::{
     sync::Arc,
 };
 use tokio::{
-    sync::mpsc,
+    net::{TcpListener, TcpStream, UdpSocket},
+    sync::mpsc, io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt},
 };
 
 use clap::Parser;
 use thiserror::Error;
-use tokio::net::UdpSocket;
 use tracing::{Instrument, Level};
 
 use array_buffer::ArrayBuffer;
@@ -94,6 +94,20 @@ async fn main() {
     tracing::info!(transport = "UDP", port = args.port, "Listening");
     spawn_udp_handler(cache.clone(), rx);
 
+    // TCP Listener
+    let tcp = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], args.port))).await {
+        Ok(res) => res,
+        Err(_) => {
+            tracing::error!(
+                transport = "TCP",
+                port = args.port,
+                "Failed to bind listener"
+            );
+            return;
+        }
+    };
+    tracing::info!(transport = "TCP", port = args.port, "Listening");
+
     // Handle exit signal
     let (sigint_sender, mut sigint_reciever) = tokio::sync::broadcast::channel(1);
     tokio::spawn(async move {
@@ -103,11 +117,16 @@ async fn main() {
         sigint_sender.send(())
     });
 
+    let resolver_shim = Arc::new(args.resolver);
+
     let mut udp_buffer = [0; 1024];
     loop {
         tokio::select! {
             (size, source) = udp.recv(&mut udp_buffer) => {
                 udp.enqueue(&udp_buffer[..size], source, |rx| spawn_udp_handler(cache.clone(), rx)).await;
+            }
+            Ok((socket, source)) = tcp.accept() => {
+                tokio::spawn(handle_tcp(cache.clone(), Arc::clone(&resolver_shim), socket, source));
             }
             _ = sigint_reciever.recv() => break,
         }
@@ -120,10 +139,10 @@ async fn main() {
 fn spawn_udp_handler(cache: EVCache, mut rx: mpsc::Receiver<UDPState>) {
     tokio::spawn(async move {
         let mut response = ArrayBuffer::new().with_max_len(512);
-        while let Some(state) = rx.recv().await {
+        while let Some(mut state) = rx.recv().await {
             response.clear();
             async {
-                handle_dns_packet(state.buffer, &mut response, &state.forwarding, &cache).await;
+                handle_dns_packet(&mut state.buffer, &mut response, &state.forwarding, &cache).await;
                 if response.len() > 0 {
                     if let Err(_) = state
                         .socket
@@ -140,9 +159,58 @@ fn spawn_udp_handler(cache: EVCache, mut rx: mpsc::Receiver<UDPState>) {
     });
 }
 
+// NOTE: An owned EVCache is needed to have its own read handle on the cache data.
+async fn handle_tcp(cache: EVCache, forwarding_addr: Arc<SocketAddr>, mut stream: TcpStream, source: SocketAddr) {
+    use tokio::io::AsyncReadExt;
 
+    let mut request = ArrayBuffer::new().with_max_len(u16::MAX as usize);
+    let mut response = ArrayBuffer::new().with_max_len(u16::MAX as usize);
+    let mut size_buf = [0; 2];
 
+    // FIXME: Implement timeouts
+    loop {
+        let _ = tracing::info_span!("dns_request", transport = "TCP", source = %source).entered();
+        // TCP DNS sends a u16 indicating the length of the packet before the actual packet data.
+        let mut read_size_buf = 0;
+        while read_size_buf < 2 {
+            let Ok(read) = stream.read(&mut size_buf[read_size_buf..]).await else {
+                tracing::error!(transport="TCP","Error reading from client");
+                break;
+            };
+            read_size_buf += read;
+        }
 
+        let len = u16::from_be_bytes(size_buf) as usize;
+
+        if len == 0 {
+            break;
+        }
+
+        // FIXME: Validate and scrutinize input size
+        request.clear_with_max_len(Some(len));
+
+        match stream.read_buf(&mut request).await {
+            Ok(n) if n == 0 => break,
+            Ok(n) if n == request.len() && n == len => {}
+            Ok(read) => {
+                tracing::warn!(transport="TCP", indicated=len, read, "Received less bytes than the indicated size by client. Closing...");
+                break;
+            }
+            Err(_) => {
+                tracing::error!(transport="TCP","Error reading from client");
+                break;
+            }
+        };
+
+        response.clear();
+        handle_dns_packet(&mut request, &mut response, &forwarding_addr, &cache).await;
+        if let Err(_) = stream.write_all(&(response.len() as u16).to_be_bytes()).await {
+            tracing::error!(transport="TCP","Error sending response to client");
+            break;
+        }
+        if let Err(_) = stream.write_buf(&mut response).await {
+            tracing::error!(transport="TCP","Error sending response to client");
+            break;
         }
     }
 }
@@ -270,7 +338,7 @@ fn configure_tracing(max_level: Level) {
 }
 
 async fn handle_dns_packet(
-    buf: ArrayBuffer,
+    buf: &mut ArrayBuffer,
     response: &mut ArrayBuffer,
     forwarding_addr: &SocketAddr,
     cache: &EVCache,

@@ -102,6 +102,11 @@ impl ArrayBuffer {
         self.len = 0;
     }
 
+    pub fn clear_with_max_len(&mut self, max_len: Option<usize>) {
+        self.clear();
+        self.max_len = max_len;
+    }
+
     fn grow(&mut self, min_new_space: usize) {
         const GROWTH_FACTOR: f64 = 1.5;
         let cap = self.capacity();
